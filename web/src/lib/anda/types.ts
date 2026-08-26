@@ -64,6 +64,41 @@ export interface RealtimeTransport {
   subscribe(roomId: string, handlers: RealtimeHandlers): () => void;
 }
 
+// ---------------------------------------------------------------------------
+// Offline persistence (PRD §14, §15)
+// ---------------------------------------------------------------------------
+
+/** A durable, server-validated-on-flush mutation made offline (§14). */
+export interface PendingMutation {
+  id?: number;
+  kind: 'usage' | 'purchase';
+  roomId: string;
+  quantity: number;
+  totalCost?: number;
+  createdAt: number;
+}
+
+/** A queued mutation that the server rejected during flush (§15, §24). */
+export interface RejectedMutation {
+  kind: 'usage' | 'purchase';
+  roomId: string;
+  quantity: number;
+  totalCost?: number;
+  error: string;
+  recordedAt: number;
+}
+
+/** IndexedDB-backed offline repository (identity, cache, pending queue). */
+export interface OfflineRepo {
+  saveMeta(key: string, value: unknown): Promise<void>;
+  loadMeta<T>(key: string): Promise<T | undefined>;
+  cacheSet<T>(key: string, value: T): Promise<void>;
+  cacheGet<T>(key: string): Promise<T | undefined>;
+  enqueue(mutation: PendingMutation): Promise<number>;
+  listPending(): Promise<PendingMutation[]>;
+  removePending(id: number): Promise<void>;
+}
+
 /** Typed client over the SECURITY DEFINER RPCs. */
 export interface AndaApi {
   fetchLedger(roomId: string): Promise<LedgerMemberRow[]>;

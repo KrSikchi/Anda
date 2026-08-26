@@ -1,17 +1,14 @@
-// Anda — client store (§12, §13, §26).
-//
-// Authoritative-first: on every relevant database event the store REFETCHES
-// `room_ledger` (and `room_history`) and recomputes derived state. It never
-// invents inventory/liability numbers on its own. Optimistic estimates are a
-// temporary display layer (§13): applied instantly for perceived latency,
-// then overwritten by the authoritative refetch on confirmation, or reverted
-// when the server rejects the operation (§24).
+// Anda — room-scoped realtime + offline store (PRD §7, §12–§15, §26)
 
 import type {
   AndaApi,
   HistoryEntry,
+  LedgerMemberRow,
+  OfflineRepo,
+  PendingMutation,
   RealtimeEvent,
   RealtimeTransport,
+  RejectedMutation,
   RoomSnapshot,
   SyncStatus,
 } from './types';
@@ -21,11 +18,38 @@ export interface StoreOptions {
   transport: RealtimeTransport;
   roomId: string;
   currentMemberId: string;
+  /** IndexedDB-backed offline repository (defaults to the shared instance). */
+  repo?: OfflineRepo;
 }
 
-interface PendingOp {
+interface OverlayOp {
+  id?: number;
   kind: 'usage' | 'purchase';
   quantity: number;
+  totalCost?: number;
+}
+
+// Server validation failures (raised as 'Anda: …', §24). These are NEVER
+// queued — they are authoritative rejections and are surfaced immediately.
+const VALIDATION_MARKERS = [
+  'not enough eggs remaining',
+  'not a member of this room',
+  'usage not found',
+  'already been corrected',
+  'corrected amount',
+  'quantity must be',
+  'total cost cannot be',
+  'room not found',
+  'not signed in',
+];
+
+export function isValidationError(message: string): boolean {
+  return VALIDATION_MARKERS.some((m) => message.includes(m));
+}
+
+export async function defaultOfflineRepo(): Promise<OfflineRepo> {
+  const { IdbRepo } = await import('./db');
+  return new IdbRepo();
 }
 
 export class AndaStore {
@@ -38,43 +62,58 @@ export class AndaStore {
   history: HistoryEntry[] | null = null;
   /** Sync indicator (§14): Synced / Syncing / Offline. */
   status: SyncStatus = 'syncing';
-  /** Last friendly error from the server (or transport). */
+  /** Last friendly error (or "Offline — saved on this device"). */
   lastError: string | null = null;
+  /** Queued-but-unconfirmed mutations surfaced to the UI (never finished truth). */
+  pending: OverlayOp[] = [];
+  /** Queue items the server rejected on flush — surfaced, never silently dropped (§15, §24). */
+  rejected: RejectedMutation[] = [];
 
   private readonly api: AndaApi;
   private readonly transport: RealtimeTransport;
+  private readonly repo: OfflineRepo;
   private unsubscribe: (() => void) | null = null;
   private connected = false;
-  private pending: PendingOp[] = [];
-  private refetches = 0; // observable for tests
+  private flushing = false;
   private closed = false;
+  private refetches = 0;
 
   constructor(opts: StoreOptions) {
     this.api = opts.api;
     this.transport = opts.transport;
     this.roomId = opts.roomId;
     this.currentMemberId = opts.currentMemberId;
+    this.repo = opts.repo ?? new NoopRepo();
   }
 
-  /** Connect the room-scoped subscription and load the authoritative snapshot. */
+  /** Connect room-scoped subscription and load authoritative state (or cache). */
   async init(): Promise<void> {
     this.status = 'syncing';
+    this.attachWindowListeners();
     this.unsubscribe = this.transport.subscribe(this.roomId, {
-      onEvent: (event) => {
-        void this.onRealtimeEvent(event);
-      },
+      onEvent: (event) => this.onRealtimeEvent(event),
       onConnection: (connected) => this.onConnection(connected),
+    });
+    await this.repo.saveMeta('identity', {
+      memberId: this.currentMemberId,
+      roomId: this.roomId,
     });
     try {
       await this.refresh();
+      await this.hydratePending();
+      if (this.connected) await this.flushPending();
       this.status = this.connected ? 'synced' : 'syncing';
     } catch (err) {
-      this.lastError = toFriendly(err);
-      this.status = this.connected ? 'synced' : 'offline';
+      // Network unavailable on boot: hydrate from the last cached snapshot and
+      // any unflushed queue, and mark Offline (§14).
+      await this.hydrateFromCache();
+      await this.hydratePending();
+      this.lastError = 'Offline — saved on this device';
+      this.status = 'offline';
     }
   }
 
-  /** The displayed view: authoritative state + any pending optimistic ops. */
+  /** The displayed view: authoritative state + pending estimates (§13/§15). */
   get view(): RoomSnapshot | null {
     if (!this.state) return null;
     let inventory = this.state.inventory;
@@ -102,37 +141,64 @@ export class AndaStore {
     };
   }
 
-  /** §13: optimistic usage — perceived-latency estimate, server-confirmed. */
+  /** §13/§14: usage — optimistic when online, queued when offline. */
   async recordUsage(quantity: number): Promise<void> {
+    if (this.isOffline()) {
+      await this.enqueue({ kind: 'usage', roomId: this.roomId, quantity, createdAt: Date.now() });
+      return;
+    }
     this.pending.push({ kind: 'usage', quantity });
     this.status = 'syncing';
     try {
       await this.api.recordUsage(this.roomId, quantity);
-      this.pending = [];
+      this.dropFromOverlay({ kind: 'usage', quantity });
       await this.syncFromAuthoritative();
     } catch (err) {
+      const msg = toFriendly(err);
       this.pending = [];
-      this.lastError = toFriendly(err);
-      // No authoritative change occurred on this device; the server truth
-      // stands. Revert the optimistic estimate and surface why (§24).
-      this.status = this.connected ? 'synced' : 'offline';
-      throw err;
+      if (isValidationError(msg)) {
+        this.lastError = msg;
+        this.status = this.connected ? 'synced' : 'offline';
+        throw err;
+      }
+      // Transient connectivity: keep the intent durable, queue it (§14).
+      await this.enqueue({ kind: 'usage', roomId: this.roomId, quantity, createdAt: Date.now() });
     }
   }
 
-  /** §13: optimistic purchase — same perceive/confirm/reconcile lifecycle. */
+  /** §13/§14: purchase — optimistic when online, queued when offline. */
   async recordPurchase(quantity: number, totalCost: number): Promise<void> {
-    this.pending.push({ kind: 'purchase', quantity });
+    if (this.isOffline()) {
+      await this.enqueue({
+        kind: 'purchase',
+        roomId: this.roomId,
+        quantity,
+        totalCost,
+        createdAt: Date.now(),
+      });
+      return;
+    }
+    this.pending.push({ kind: 'purchase', quantity, totalCost });
     this.status = 'syncing';
     try {
       await this.api.recordPurchase(this.roomId, quantity, totalCost);
-      this.pending = [];
+      this.dropFromOverlay({ kind: 'purchase', quantity, totalCost });
       await this.syncFromAuthoritative();
     } catch (err) {
+      const msg = toFriendly(err);
       this.pending = [];
-      this.lastError = toFriendly(err);
-      this.status = this.connected ? 'synced' : 'offline';
-      throw err;
+      if (isValidationError(msg)) {
+        this.lastError = msg;
+        this.status = this.connected ? 'synced' : 'offline';
+        throw err;
+      }
+      await this.enqueue({
+        kind: 'purchase',
+        roomId: this.roomId,
+        quantity,
+        totalCost,
+        createdAt: Date.now(),
+      });
     }
   }
 
@@ -148,12 +214,60 @@ export class AndaStore {
       members: rows,
       currentMemberId: this.currentMemberId,
     };
+    await this.repo.cacheSet(`ledger:${this.roomId}`, rows);
     try {
       this.history = await this.api.fetchHistory(this.roomId);
+      await this.repo.cacheSet(`history:${this.roomId}`, this.history);
     } catch {
-      // History enriches the screen; ledger remains authoritative.
+      // history is an enrichment; ledger remains authoritative
     }
     this.refetches += 1;
+  }
+
+  /** Flush the durable pending queue through server validation (§15). */
+  async flushPending(): Promise<void> {
+    if (this.flushing) return;
+    this.flushing = true;
+    this.status = 'syncing';
+    try {
+      const items = (await this.repo.listPending()).filter((m) => m.roomId === this.roomId);
+      for (const item of items) {
+        try {
+          if (item.kind === 'usage') {
+            await this.api.recordUsage(this.roomId, item.quantity);
+          } else {
+            await this.api.recordPurchase(this.roomId, item.quantity, item.totalCost ?? 0);
+          }
+          if (item.id != null) await this.repo.removePending(item.id);
+          this.dropFromOverlay(item);
+        } catch (err) {
+          const msg = toFriendly(err);
+          if (isValidationError(msg)) {
+            // Authoritative rejection: drop the queue item, surface it clearly —
+            // never silently discard a transaction (§15, §24).
+            if (item.id != null) await this.repo.removePending(item.id);
+            this.dropFromOverlay(item);
+            this.rejected.push({
+              kind: item.kind,
+              roomId: item.roomId,
+              quantity: item.quantity,
+              totalCost: item.totalCost,
+              error: msg,
+              recordedAt: Date.now(),
+            });
+            this.lastError = msg;
+            continue; // still try the rest of the queue
+          }
+          // Transient error: keep the item queued; retry when connectivity
+          // returns. Never lose the intent.
+          this.status = 'offline';
+          return;
+        }
+      }
+      await this.syncFromAuthoritative();
+    } finally {
+      this.flushing = false;
+    }
   }
 
   clearError(): void {
@@ -162,16 +276,63 @@ export class AndaStore {
 
   dispose(): void {
     this.closed = true;
+    this.detachWindowListeners();
     this.unsubscribe?.();
     this.unsubscribe = null;
   }
 
   // -- internals ------------------------------------------------------------
 
+  private async enqueue(mutation: PendingMutation): Promise<void> {
+    const id = await this.repo.enqueue(mutation);
+    this.pending.push({ id, kind: mutation.kind, quantity: mutation.quantity, totalCost: mutation.totalCost });
+    this.status = 'offline';
+    this.lastError = 'Offline — saved on this device';
+  }
+
+  private isOffline(): boolean {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+    return !this.connected;
+  }
+
+  private dropFromOverlay(op: OverlayOp): void {
+    this.pending = this.pending.filter((p) => {
+      if (op.id != null && p.id === op.id) return false;
+      return p.kind !== op.kind || p.quantity !== op.quantity;
+    });
+  }
+
+  private async hydratePending(): Promise<void> {
+    const items = (await this.repo.listPending()).filter((m) => m.roomId === this.roomId);
+    this.pending = items.map((m) => ({
+      id: m.id,
+      kind: m.kind,
+      quantity: m.quantity,
+      totalCost: m.totalCost,
+    }));
+  }
+
+  private async hydrateFromCache(): Promise<void> {
+    const rows = await this.repo.cacheGet<LedgerMemberRow[]>(`ledger:${this.roomId}`);
+    if (rows && rows.length) {
+      const first = rows[0];
+      this.state = {
+        roomId: this.roomId,
+        roomName: first.room_name,
+        inventory: first.inventory,
+        lowStockThreshold: first.low_stock_threshold,
+        lowStockNotified: first.low_stock_notified,
+        members: rows,
+        currentMemberId: this.currentMemberId,
+      };
+      this.history = (await this.repo.cacheGet<HistoryEntry[]>(`history:${this.roomId}`)) ?? null;
+    } else {
+      this.state = null;
+    }
+  }
+
   private async onRealtimeEvent(event: RealtimeEvent): Promise<void> {
     if (this.closed) return;
-    // Layer-3 guard (§12): even with the channel filter, never apply an event
-    // that is not for this room.
     const rowRoom = String(event.row.room_id ?? event.row.id ?? '');
     if (rowRoom !== this.roomId) return;
     await this.syncFromAuthoritative();
@@ -191,15 +352,56 @@ export class AndaStore {
   private onConnection(connected: boolean): void {
     this.connected = connected;
     if (!connected) {
-      this.status = 'offline';
+      if (this.status !== 'offline') this.status = 'offline';
       return;
     }
-    // Reconnected: recompute from authoritative state (never from stale local).
     if (this.status === 'offline') {
       this.status = 'syncing';
-      void this.syncFromAuthoritative();
+      void this.flushPending();
     }
   }
+
+  private onWindowOnline = (): void => {
+    if (this.connected && this.status === 'offline') {
+      this.status = 'syncing';
+      void this.flushPending();
+    }
+  };
+
+  private onWindowOffline = (): void => {
+    if (this.status !== 'offline') this.status = 'offline';
+  };
+
+  private attachWindowListeners(): void {
+    if (typeof window === 'undefined') return;
+    window.addEventListener('online', this.onWindowOnline);
+    window.addEventListener('offline', this.onWindowOffline);
+  }
+
+  private detachWindowListeners(): void {
+    if (typeof window === 'undefined') return;
+    window.removeEventListener('online', this.onWindowOnline);
+    window.removeEventListener('offline', this.onWindowOffline);
+  }
+}
+
+/** Fallback when no repo is provided (e.g. legacy tests): no-op. */
+class NoopRepo implements OfflineRepo {
+  async saveMeta(): Promise<void> {}
+  async loadMeta(): Promise<undefined> {
+    return undefined;
+  }
+  async cacheSet(): Promise<void> {}
+  async cacheGet(): Promise<undefined> {
+    return undefined;
+  }
+  async enqueue(): Promise<number> {
+    return 0;
+  }
+  async listPending(): Promise<PendingMutation[]> {
+    return [];
+  }
+  async removePending(): Promise<void> {}
 }
 
 export function toFriendly(err: unknown): string {

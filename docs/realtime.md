@@ -1,8 +1,10 @@
 # Anda — Realtime Synchronization (PRD §12, §26)
 
-> Status: Phase 6 implemented and gated locally. Supabase Realtime wiring is
-> in `web/src/lib/anda/transport.ts`; the transport contract is exercised by
-> the mock-backed store suite (`web/src/lib/anda/__tests__/store.test.ts`).
+> Status: Phase 6 + 7 implemented and gated locally. Supabase Realtime wiring
+> is in `web/src/lib/anda/transport.ts`; offline persistence (IndexedDB queue)
+> in `web/src/lib/anda/db.ts` + `store.ts`. The transport contract is exercised
+> by mock-backed store suites (`web/src/lib/anda/__tests__/`), and the offline
+> repository runs against real IndexedDB (fake-indexeddb).
 > End-to-end delivery timing (< 1–2 s) is verified against the managed
 > service in Phase 10 production testing.
 
