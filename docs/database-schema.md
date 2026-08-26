@@ -32,8 +32,9 @@ Canonical artifact: `supabase/migrations/0001_initial_schema.sql` (version-contr
 ## Migration discipline (PRD §25, §28)
 
 - Schema is version-controlled under `supabase/migrations/`, each file one transaction.
-- Deferred to later phases by design: negative-inventory atomic check (Phase 5), low-stock crossing trigger (Phase 8), write RPCs (Phases 3–5). This keeps the PRD's incremental sequence intact — nothing is skipped, nothing is pulled forward.
+- `0002_room_lifecycle.sql` adds the five Phase-3 SECURITY DEFINER RPCs that are the only write path: `create_room`, `join_room`, `leave_room`, `regenerate_room_code`, `soft_delete_room` (see `docs/member-identity.md` for the catalog and authorization detail). It also enables `pgcrypto` (for `gen_random_bytes`-based share-code generation, §21) — available in Supabase's default extension set.
+- Deferred to later phases by design: ledger RPCs (purchases, usage, corrections) + negative-inventory atomic check (Phases 4–5), low-stock crossing trigger (Phase 8). This keeps the PRD's incremental sequence intact — nothing is skipped, nothing is pulled forward.
 
 ## Local validation (Phase 2 gate)
 
-See `supabase/tests/` — a local-only `auth.uid()` stub plus a smoke suite covering the schema-level rows of the PRD §27 matrix (constraints, derivation, immutability, RLS cross-room isolation, inactive-member lockout, room soft-delete invisibility, device identity).
+See `supabase/tests/` — a local-only `auth.uid()` stub plus suites covering the schema-level and room-lifecycle rows of the PRD §27 matrix (constraints, derivation, immutability, RLS cross-room isolation, inactive-member lockout, room soft-delete invisibility, device identity, host powers, code regeneration).
