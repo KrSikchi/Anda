@@ -25,7 +25,7 @@
 
 ## Liability costing (§8) — decision D16
 
-- **Deterministic FIFO**: consumption events in chronological order (by `recorded_at` of each original usage) draw eggs from the earliest purchase batches first; each consumed egg is priced at its batch's `cost_per_egg`, via a single interval-overlap SQL pass. Historical prices are never overwritten or silently replaced by the latest price.
+- **Deterministic FIFO**: consumption events in chronological order (by `recorded_at` of each original usage, tie-broken by `id`) draw eggs from the earliest purchase batches first; each consumed egg is priced at its batch's `cost_per_egg`, via a single interval-overlap SQL pass. Historical prices are never overwritten or silently replaced by the latest price. (Test fixtures use one transaction per event so their `recorded_at` values are strictly increasing and the expected numbers are stable; production ties — same-microsecond events — break deterministically by `id`.)
 - Example (from the Phase 4 suite): batches 30 @ ₹8 and 12 @ ₹5; events H4, J12→2 (corrected), S6, S25, Y5→3 (corrected), Z2 give H ₹32, J ₹16, S ₹227 (24×8 + 7×5), Y ₹15, Z ₹10 — total ₹300 = 30×8 + 12×5, fully determined by the ledger.
 
 ## Atomicity (§11) — decision D13

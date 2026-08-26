@@ -68,14 +68,19 @@ select public.vtest((select v from public.anda_test_state where k='ledger_room')
 
 -- ---------------------------------------------------------------------------
 -- PURCHASES (§8)
+-- NOTE (test determinism): each ledger event gets its own psql DO block so
+-- `recorded_at` (= now(), transaction start) is strictly increasing. Sharing
+-- one block would give events an identical timestamp and FIFO would fall to
+-- the uuid tiebreak — a nondeterministic fixture. The production order key
+-- stays (recorded_at, id).
 -- ---------------------------------------------------------------------------
 do $$
-declare v_room uuid; v_qty integer; v_cpe numeric; v_inv_after integer; v_pre integer;
+declare v_room uuid; v_qty integer; v_cpe numeric; v_inv_after integer;
 begin
     select v::uuid into v_room from public.anda_test_state where k='ledger_room';
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a1', false);
 
-    -- P1: 30 @ 240 → ₹8/egg
+    -- P1: 30 @ 240 → ₹8/egg (own transaction → own timestamp)
     select r.quantity, r.cost_per_egg into v_qty, v_cpe
     from public.record_purchase(v_room, 30, 240) r;
     perform public.vtest(v_qty = 30, 'T1a: purchase P1 quantity 30');
@@ -83,8 +88,15 @@ begin
 
     select inventory into v_inv_after from public.room_ledger(v_room) limit 1;
     perform public.vtest(v_inv_after = 30, 'T1c: inventory 30 after P1 (derived)');
+end $$;
 
-    -- P2: 12 @ 60 → ₹5/egg, price changed since last purchase
+do $$
+declare v_room uuid; v_qty integer; v_cpe numeric; v_inv_after integer;
+begin
+    select v::uuid into v_room from public.anda_test_state where k='ledger_room';
+    perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a1', false);
+
+    -- P2: 12 @ 60 → ₹5/egg, price changed since last purchase (own transaction)
     select r.quantity, r.cost_per_egg into v_qty, v_cpe
     from public.record_purchase(v_room, 12, 60) r;
     perform public.vtest(v_qty = 12 and v_cpe = 5.0, 'T1d: P2 keeps its own price (60/12 = 5)');
@@ -108,23 +120,34 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- USAGE (§9) — inventory decreases; derived at each step
+-- USAGE (§9) — inventory decreases; derived at each step.
+-- Each consumption event in its own transaction → strictly increasing
+-- recorded_at → deterministic FIFO ordering for later assertions.
 -- ---------------------------------------------------------------------------
 do $$
 declare v_room uuid; v_inv integer;
 begin
     select v::uuid into v_room from public.anda_test_state where k='ledger_room';
-
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a1', false);
     perform public.record_usage(v_room, 4);                       -- H 4
     select inventory into v_inv from public.room_ledger(v_room) limit 1;
     perform public.vtest(v_inv = 38, 'T2a: usage 4 → inventory 38');
+end $$;
 
+do $$
+declare v_room uuid; v_inv integer;
+begin
+    select v::uuid into v_room from public.anda_test_state where k='ledger_room';
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a2', false);
     perform public.record_usage(v_room, 12);                      -- J 12
     select inventory into v_inv from public.room_ledger(v_room) limit 1;
     perform public.vtest(v_inv = 26, 'T2b: usage 12 → inventory 26');
+end $$;
 
+do $$
+declare v_room uuid; v_inv integer;
+begin
+    select v::uuid into v_room from public.anda_test_state where k='ledger_room';
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a3', false);
     perform public.record_usage(v_room, 6);                       -- S 6
     select inventory into v_inv from public.room_ledger(v_room) limit 1;

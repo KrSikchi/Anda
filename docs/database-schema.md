@@ -34,7 +34,8 @@ Canonical artifact: `supabase/migrations/0001_initial_schema.sql` (version-contr
 - Schema is version-controlled under `supabase/migrations/`, each file one transaction.
 - `0002_room_lifecycle.sql` adds the five Phase-3 SECURITY DEFINER RPCs that are the only write path: `create_room`, `join_room`, `leave_room`, `regenerate_room_code`, `soft_delete_room` (see `docs/member-identity.md` for the catalog and authorization detail). It also enables `pgcrypto` (for `gen_random_bytes`-based share-code generation, §21) — available in Supabase's default extension set.
 - `0003_ledger.sql` adds the Phase-4 ledger: `record_purchase`, `record_usage` (atomic check-and-write), `correct_usage`, `room_ledger`, `room_history`, plus the one-correction-per-usage index (see `docs/ledger.md`).
-- Deferred to later phases by design: concurrency stress-testing of the atomic stock check (Phase 5), low-stock crossing trigger (Phase 8). This keeps the PRD's incremental sequence intact — nothing is skipped, nothing is pulled forward.
+- `0004_atomicity.sql` is the Phase-5 hardening: `record_purchase` now takes the room-row `FOR UPDATE` lock too (D19), so every stock mutation for a room is total-ordered; concurrency verified with pgbench races (see `docs/atomicity.md`). No schema change.
+- Deferred to later phases by design: low-stock crossing trigger (Phase 8). This keeps the PRD's incremental sequence intact — nothing is skipped, nothing is pulled forward.
 
 ## Local validation (Phase 2 gate)
 
