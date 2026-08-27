@@ -26,7 +26,8 @@ web/                           → frontend: Vite + React + TypeScript + PWA (§
 - Phase 6 — Realtime: **done** (migration `0005_realtime.sql` publishes ledger tables; client store with room-scoped subscriptions, derived-state recompute, sync indicators, optimistic reconciliation; 8 store tests in `web/`; see `docs/realtime.md`).
 - Phase 7 — Offline persistence: **done** (IndexedDB via `idb`: durable cache, member identity, pending mutation queue; reconnect flush with server validation; rejected items surfaced never discarded; 5 offline tests incl. reload-persistence and last-egg conflict; see `docs/offline.md`).
 - Phase 8 — Notifications: **done** (migration `0006_notifications.sql`: `push_subscriptions` (room→member→device, owner-RLS), `low_stock_alerts` internal episode queue, same-transaction threshold-crossing state machine; Supabase Edge Function `low-stock-notify` + pure VAPID/payload helpers; 24 SQL + 8 unit tests; see `docs/notifications.md`).
-- Phase 9 — UX refinement: next.
+- Phase 9 — UX refinement: **done** (React UI on the solid store: Welcome/Create/Join screens, Dashboard with stock + member liability + low-stock warning + sync indicator, Usage and Purchase entry modals with stepper controls, History with correction links, Room info with leave flow; mobile-first PWA; see `web/src/screens/`).
+- Phase 10 — Full verification & deployment: next (end-to-end production-like deployment, cross-device testing, security boundary verification).
 - Phase 6 — Realtime (Supabase Realtime, room-scoped).
 - Phase 7 — Offline persistence (IndexedDB, pending queue, reconciliation).
 - Phase 8 — Notifications (Web Push, low-stock threshold crossing).
@@ -56,9 +57,12 @@ psql -X -v ON_ERROR_STOP=1 -d anda_test -f supabase/tests/atomicity_setup.sql
 psql -X -d anda_test -f supabase/tests/atomicity_assert.sql    # Phase 5 assertions (20 checks)
 psql -X -d anda_test -f supabase/tests/notifications.sql       # Phase 8 gate (24 checks)
 
-# Edge-function pure helpers + store suites (requires Node ≥ 18)
-cd web && npm install && npm test       # 21 tests: realtime (8), offline (5),
-                                        # low-stock push helpers (8)
+# Local: install & run the web app (Phase 9 UI)
+cd web && npm install && npm run dev    # vite dev server (PWA-ready)
+
+# Test: all suites
+cd web && npm test                       # 21 tests: realtime (8), offline (5),
+                                         # low-stock push helpers (8)
 ```
 
 The stub is LOCAL ONLY and mirrors Supabase's `auth.uid()` so RLS policies can be exercised.

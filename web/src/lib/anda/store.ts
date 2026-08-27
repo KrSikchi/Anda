@@ -1,4 +1,5 @@
 // Anda — room-scoped realtime + offline store (PRD §7, §12–§15, §26)
+// React notification: every mutation bumps _version and calls _notify.
 
 import type {
   AndaApi,
@@ -68,6 +69,10 @@ export class AndaStore {
   pending: OverlayOp[] = [];
   /** Queue items the server rejected on flush — surfaced, never silently dropped (§15, §24). */
   rejected: RejectedMutation[] = [];
+  /** Version counter for React useSyncExternalStore. */
+  _version = 0;
+  /** Called by the store after every state mutation to notify React. */
+  _notify: (() => void) | undefined;
 
   private readonly api: AndaApi;
   private readonly transport: RealtimeTransport;
@@ -76,7 +81,6 @@ export class AndaStore {
   private connected = false;
   private flushing = false;
   private closed = false;
-  private refetches = 0;
 
   constructor(opts: StoreOptions) {
     this.api = opts.api;
@@ -88,7 +92,7 @@ export class AndaStore {
 
   /** Connect room-scoped subscription and load authoritative state (or cache). */
   async init(): Promise<void> {
-    this.status = 'syncing';
+    this.status = 'syncing'; this.notify();
     this.attachWindowListeners();
     this.unsubscribe = this.transport.subscribe(this.roomId, {
       onEvent: (event) => this.onRealtimeEvent(event),
@@ -102,14 +106,12 @@ export class AndaStore {
       await this.refresh();
       await this.hydratePending();
       if (this.connected) await this.flushPending();
-      this.status = this.connected ? 'synced' : 'syncing';
-    } catch (err) {
-      // Network unavailable on boot: hydrate from the last cached snapshot and
-      // any unflushed queue, and mark Offline (§14).
+      this.status = this.connected ? 'synced' : 'syncing'; this.notify();
+    } catch (_err) {
       await this.hydrateFromCache();
       await this.hydratePending();
       this.lastError = 'Offline — saved on this device';
-      this.status = 'offline';
+      this.status = 'offline'; this.notify();
     }
   }
 
@@ -148,7 +150,7 @@ export class AndaStore {
       return;
     }
     this.pending.push({ kind: 'usage', quantity });
-    this.status = 'syncing';
+    this.status = 'syncing'; this.notify();
     try {
       await this.api.recordUsage(this.roomId, quantity);
       this.dropFromOverlay({ kind: 'usage', quantity });
@@ -158,10 +160,9 @@ export class AndaStore {
       this.pending = [];
       if (isValidationError(msg)) {
         this.lastError = msg;
-        this.status = this.connected ? 'synced' : 'offline';
+        this.status = this.connected ? 'synced' : 'offline'; this.notify();
         throw err;
       }
-      // Transient connectivity: keep the intent durable, queue it (§14).
       await this.enqueue({ kind: 'usage', roomId: this.roomId, quantity, createdAt: Date.now() });
     }
   }
@@ -179,7 +180,7 @@ export class AndaStore {
       return;
     }
     this.pending.push({ kind: 'purchase', quantity, totalCost });
-    this.status = 'syncing';
+    this.status = 'syncing'; this.notify();
     try {
       await this.api.recordPurchase(this.roomId, quantity, totalCost);
       this.dropFromOverlay({ kind: 'purchase', quantity, totalCost });
@@ -189,7 +190,7 @@ export class AndaStore {
       this.pending = [];
       if (isValidationError(msg)) {
         this.lastError = msg;
-        this.status = this.connected ? 'synced' : 'offline';
+        this.status = this.connected ? 'synced' : 'offline'; this.notify();
         throw err;
       }
       await this.enqueue({
@@ -221,14 +222,14 @@ export class AndaStore {
     } catch {
       // history is an enrichment; ledger remains authoritative
     }
-    this.refetches += 1;
+    this.notify();
   }
 
   /** Flush the durable pending queue through server validation (§15). */
   async flushPending(): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
-    this.status = 'syncing';
+    this.status = 'syncing'; this.notify();
     try {
       const items = (await this.repo.listPending()).filter((m) => m.roomId === this.roomId);
       for (const item of items) {
@@ -243,8 +244,6 @@ export class AndaStore {
         } catch (err) {
           const msg = toFriendly(err);
           if (isValidationError(msg)) {
-            // Authoritative rejection: drop the queue item, surface it clearly —
-            // never silently discard a transaction (§15, §24).
             if (item.id != null) await this.repo.removePending(item.id);
             this.dropFromOverlay(item);
             this.rejected.push({
@@ -256,11 +255,10 @@ export class AndaStore {
               recordedAt: Date.now(),
             });
             this.lastError = msg;
-            continue; // still try the rest of the queue
+            this.notify();
+            continue;
           }
-          // Transient error: keep the item queued; retry when connectivity
-          // returns. Never lose the intent.
-          this.status = 'offline';
+          this.status = 'offline'; this.notify();
           return;
         }
       }
@@ -272,6 +270,8 @@ export class AndaStore {
 
   clearError(): void {
     this.lastError = null;
+    this._version += 1;
+    this._notify?.();
   }
 
   dispose(): void {
@@ -288,6 +288,7 @@ export class AndaStore {
     this.pending.push({ id, kind: mutation.kind, quantity: mutation.quantity, totalCost: mutation.totalCost });
     this.status = 'offline';
     this.lastError = 'Offline — saved on this device';
+    this.notify();
   }
 
   private isOffline(): boolean {
@@ -310,6 +311,7 @@ export class AndaStore {
       quantity: m.quantity,
       totalCost: m.totalCost,
     }));
+    this.notify();
   }
 
   private async hydrateFromCache(): Promise<void> {
@@ -328,7 +330,9 @@ export class AndaStore {
       this.history = (await this.repo.cacheGet<HistoryEntry[]>(`history:${this.roomId}`)) ?? null;
     } else {
       this.state = null;
+      this.history = null;
     }
+    this.notify();
   }
 
   private async onRealtimeEvent(event: RealtimeEvent): Promise<void> {
@@ -339,38 +343,44 @@ export class AndaStore {
   }
 
   private async syncFromAuthoritative(): Promise<void> {
-    this.status = 'syncing';
+    this.status = 'syncing'; this.notify();
     try {
       await this.refresh();
-      this.status = this.connected ? 'synced' : 'syncing';
+      this.status = this.connected ? 'synced' : 'syncing'; this.notify();
     } catch (err) {
       this.lastError = toFriendly(err);
-      this.status = this.connected ? 'synced' : 'offline';
+      this.status = this.connected ? 'synced' : 'offline'; this.notify();
     }
   }
 
   private onConnection(connected: boolean): void {
     this.connected = connected;
     if (!connected) {
-      if (this.status !== 'offline') this.status = 'offline';
+      if (this.status !== 'offline') { this.status = 'offline'; this.notify(); }
       return;
     }
     if (this.status === 'offline') {
       this.status = 'syncing';
+      this.notify();
       void this.flushPending();
     }
   }
 
   private onWindowOnline = (): void => {
     if (this.connected && this.status === 'offline') {
-      this.status = 'syncing';
+      this.status = 'syncing'; this.notify();
       void this.flushPending();
     }
   };
 
   private onWindowOffline = (): void => {
-    if (this.status !== 'offline') this.status = 'offline';
+    if (this.status !== 'offline') { this.status = 'offline'; this.notify(); }
   };
+
+  private notify(): void {
+    this._version += 1;
+    this._notify?.();
+  }
 
   private attachWindowListeners(): void {
     if (typeof window === 'undefined') return;
@@ -388,19 +398,11 @@ export class AndaStore {
 /** Fallback when no repo is provided (e.g. legacy tests): no-op. */
 class NoopRepo implements OfflineRepo {
   async saveMeta(): Promise<void> {}
-  async loadMeta(): Promise<undefined> {
-    return undefined;
-  }
+  async loadMeta(): Promise<undefined> { return undefined; }
   async cacheSet(): Promise<void> {}
-  async cacheGet(): Promise<undefined> {
-    return undefined;
-  }
-  async enqueue(): Promise<number> {
-    return 0;
-  }
-  async listPending(): Promise<PendingMutation[]> {
-    return [];
-  }
+  async cacheGet(): Promise<undefined> { return undefined; }
+  async enqueue(): Promise<number> { return 0; }
+  async listPending(): Promise<PendingMutation[]> { return []; }
   async removePending(): Promise<void> {}
 }
 
