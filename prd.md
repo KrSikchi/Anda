@@ -1,6 +1,6 @@
 **Product Requirements Document (PRD)**  
 
-**EggShare – Shared Egg Inventory &amp; Settlement Tracker**  
+**Anda – Shared Egg Inventory &amp; Settlement Tracker**  
 
 Version 1.0 | Confidential | Internal Use  
 
@@ -8,7 +8,7 @@ Version 1.0 | Confidential | Internal Use
 
 ### 1. Executive Summary
 
-EggShare is a lightweight, privacy-first Progressive Web App (PWA) designed exclusively for small shared living groups (apartments, flatshares, hostels). It solves the everyday friction of tracking communal egg purchases, individual consumption, real-time stock levels, and fair cost settlement without requiring traditional user accounts, email verification, or complex tenancy management.
+Anda is a lightweight, privacy-first Progressive Web App (PWA) designed exclusively for small shared living groups (apartments, flatshares, hostels). It solves the everyday friction of tracking communal egg purchases, individual consumption, real-time stock levels, and fair cost settlement without requiring traditional user accounts, email verification, or complex tenancy management.
 
 The product prioritizes:
 
@@ -358,7 +358,7 @@ Data flow for usage:
 
 ### 11. Conclusion
 
-EggShare deliberately rejects conventional account-heavy SaaS patterns in favor of a minimal, high-integrity design optimized for a very specific social context: trusted flatmates sharing a perishable staple.  
+Anda deliberately rejects conventional account-heavy SaaS patterns in favor of a minimal, high-integrity design optimized for a very specific social context: trusted flatmates sharing a perishable staple.  
 
 By making the transactional ledger the center of the system, enforcing correctness at the database layer, and leveraging managed infrastructure for realtime, auth, and uptime, the product achieves maximum reliability and minimum operational burden while remaining almost invisible in daily use.
 
@@ -373,4 +373,3 @@ The guiding principle remains:
 Prepared for internal product &amp; engineering alignment.  
 
 Next review: after first internal pilot with 1–2 apartments.
-

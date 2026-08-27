@@ -99,8 +99,20 @@ export interface OfflineRepo {
   removePending(id: number): Promise<void>;
 }
 
+export interface RoomMembership {
+  room_id: string;
+  room_name: string;
+  share_code: string;
+  member_id: string;
+  display_name: string;
+  low_stock_threshold: number;
+}
+
 /** Typed client over the SECURITY DEFINER RPCs. */
 export interface AndaApi {
+  createRoom?(roomName: string, displayName: string): Promise<RoomMembership>;
+  joinRoom?(shareCode: string, displayName: string): Promise<RoomMembership>;
+  leaveRoom?(roomId: string): Promise<void>;
   fetchLedger(roomId: string): Promise<LedgerMemberRow[]>;
   fetchHistory(roomId: string): Promise<HistoryEntry[]>;
   recordUsage(roomId: string, quantity: number): Promise<void>;

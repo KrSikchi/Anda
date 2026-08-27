@@ -8,16 +8,18 @@ import { s, SyncBadge } from '../ui';
 
 interface Props {
   store: AndaStore;
+  shareCode: string | null;
+  onLeave: () => Promise<void>;
   onNavigate: (v: string) => void;
 }
 
-export function RoomInfo({ store, onNavigate }: Props) {
+export function RoomInfo({ store, shareCode, onLeave, onNavigate }: Props) {
   useAndaStore(store);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const view = store.view;
 
   const handleLeave = async () => {
-    onNavigate('welcome');
+    await onLeave();
   };
 
   return (
@@ -31,7 +33,7 @@ export function RoomInfo({ store, onNavigate }: Props) {
       <div style={s.card}>
         <h3 style={{ margin: '0 0 6px', fontSize: 14, fontWeight: 600 }}>Room code</h3>
         <p style={{ fontSize: 22, fontWeight: 800, letterSpacing: 3, color: theme.accent, margin: 0 }}>
-          {store.roomId ? store.roomId.slice(0, 6).toUpperCase() : 'K7P4Q2'}
+          {shareCode ?? '------'}
         </p>
         <p style={{ margin: '4px 0 0', fontSize: 12, color: theme.muted }}>Share this code for others to join</p>
       </div>

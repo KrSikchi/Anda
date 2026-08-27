@@ -18,7 +18,7 @@
 //                      record: { id, room_id, inventory, threshold } }
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { WebPush } from 'npm:@negrel/webpush@0.3.4';
+import { ApplicationServer, importVapidKeys, PushMessageError } from 'jsr:@negrel/webpush@0.5.0';
 import { buildLowStockPayload } from '../_shared/payload.ts';
 import { classifyDeliveryError, filterActiveSubscriptions } from '../_shared/delivery.ts';
 
@@ -26,6 +26,40 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 const vapidPublic = Deno.env.get('VAPID_PUBLIC_KEY') ?? '';
 const vapidPrivate = Deno.env.get('VAPID_PRIVATE_KEY') ?? '';
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
+  const binary = atob(base64 + padding);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+async function createApplicationServer() {
+  const publicPoint = base64UrlToBytes(vapidPublic);
+  if (publicPoint.length !== 65 || publicPoint[0] !== 0x04) {
+    throw new Error('E_INVALID_VAPID_PUBLIC_KEY');
+  }
+
+  const x = vapidPublicFromBytes(publicPoint.slice(1, 33));
+  const y = vapidPublicFromBytes(publicPoint.slice(33, 65));
+  const vapidKeys = await importVapidKeys({
+    publicKey: { kty: 'EC', crv: 'P-256', x, y, ext: true },
+    privateKey: { kty: 'EC', crv: 'P-256', x, y, d: vapidPrivate, ext: true },
+  });
+
+  return ApplicationServer.new({
+    contactInformation: 'mailto:anda@localhost',
+    vapidKeys,
+  });
+}
+
+function vapidPublicFromBytes(value: Uint8Array): string {
+  let binary = '';
+  value.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 Deno.serve(async (req) => {
   if (!supabaseUrl || !serviceKey || !vapidPublic || !vapidPrivate) {
@@ -82,38 +116,31 @@ Deno.serve(async (req) => {
   if (subsError) return new Response(`E_SUBS:${subsError.message}`, { status: 500 });
 
   const active = filterActiveSubscriptions(subs ?? []);
-  const payload = new TextEncoder().encode(
-    JSON.stringify(buildLowStockPayload(effectiveInventory, room?.name ?? 'Your flat')),
-  );
-
-  const driver = new WebPush();
+  const payload = JSON.stringify(buildLowStockPayload(effectiveInventory, room?.name ?? 'Your flat'));
+  let driver: ApplicationServer;
+  try {
+    driver = await createApplicationServer();
+  } catch {
+    return new Response('E_INVALID_VAPID_CONFIG', { status: 500 });
+  }
   let sent = 0;
   let removed = 0;
   let retry = 0;
 
   for (const sub of active) {
-    const subscription = {
-      endpoint: sub.endpoint,
-      keys: { p256dh: sub.p256dh, auth: sub.auth_secret },
-    };
     try {
-      const res = await driver.send(payload, subscription, {
-        subject: 'mailto:anda@localhost', // configurable
-        publicKey: vapidPublic,
-        privateKey: vapidPrivate,
-      });
-      const verdict = classifyDeliveryError(res.statusCode ?? 200);
-      if (verdict === 'ok') {
-        sent += 1;
-      } else if (verdict === 'remove' || verdict === 'invalid') {
+      await driver
+        .subscribe({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth_secret } })
+        .pushTextMessage(payload, {});
+      sent += 1;
+    } catch (error) {
+      const status = error instanceof PushMessageError ? error.response.status : 0;
+      const verdict = classifyDeliveryError(status);
+      if (verdict === 'remove' || verdict === 'invalid') {
         // §17 step 4: clean up dead/invalid endpoints.
         await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint);
         removed += 1;
-      } else {
-        retry += 1;
-      }
-    } catch {
-      retry += 1;
+      } else retry += 1;
     }
   }
 
