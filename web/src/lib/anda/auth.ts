@@ -15,6 +15,7 @@
 // `my_memberships()` (migration 0007) recovers their rooms from the server.
 
 import type { SupabaseClient, User } from '@supabase/supabase-js';
+import { friendlyError, isSessionError } from './errors';
 
 export type AuthState =
   /** No session at all — fresh device, nothing to upgrade. */
@@ -108,8 +109,9 @@ export function friendlyAuthError(message: string): string {
   if (raw.includes('signups not allowed')) {
     return 'New sign-ins are turned off right now.';
   }
-  if (raw.includes('failed to fetch') || raw.includes('networkerror')) {
-    return 'No connection. Check your internet and try again.';
-  }
-  return 'Could not sign in. Try again.';
+  // Session-expiry, connectivity and the generic fallback live in errors.ts so
+  // there is exactly one place that decides what a flatmate reads.
+  return isSessionError(raw) || raw.includes('failed to fetch') || raw.includes('network')
+    ? friendlyError(raw)
+    : 'Could not sign in. Try again.';
 }

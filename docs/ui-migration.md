@@ -84,9 +84,11 @@ Supplying the Stitch `code.html` style blocks would let the tokens in
 
 ## 7. Verification performed
 
-- 46 automated tests, including one test that walks the complete MVP journey
-  (create room → code → buy → eat → Activity → Account) and one that checks a
-  room which no longer answers for this device is not repainted from cache.
+- 65 automated tests, including one test that walks the complete MVP journey
+  (create room → code → buy → eat → Activity → Account), one that drives two
+  connected clients through the real store/transport/backend, one for room
+  scoping on a shared channel, and one that checks a room which no longer
+  answers for this device is not repainted from cache.
 - `tsc --noEmit` clean; production build clean with the service worker
   generated.
 - Purchase unit price, rollback isolation and post-rejection reconciliation are

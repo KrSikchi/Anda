@@ -76,8 +76,9 @@ psql -X -d anda_test -f supabase/tests/identity_settlement.sql # 0007/0008/0009 
 # Web app
 cd web && npm install
 npm run dev      # vite dev server (PWA-ready)
-npm test         # 46 tests: MVP journey (5), realtime (8), offline (5),
-                 # money boundary (16), optimistic reconciliation (4),
+npm test         # 65 tests: MVP journey (5), realtime (8), two-client
+                 # realtime (3), offline (5), identity/auth (16), money
+                 # boundary (16), optimistic reconciliation (4),
                  # low-stock push helpers (8)
 npm run build    # tsc --noEmit && vite build (service worker generated)
 ```
