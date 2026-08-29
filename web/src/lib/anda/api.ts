@@ -11,6 +11,7 @@ export function createSupabaseApi(client: SupabaseClient): AndaApi {
       const { data, error } = await client.rpc('create_room', {
         p_room_name: roomName,
         p_display_name: displayName,
+        p_low_stock_threshold: 10
       });
       if (error) throw new Error(stripPrefix(error.message));
       return firstRow<RoomMembership>(data);
