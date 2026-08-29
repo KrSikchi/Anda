@@ -10,7 +10,7 @@ import { Navigate } from 'react-router-dom';
 import { useSession } from '../session/SessionProvider';
 import { useAndaStore } from '../lib/anda/react';
 import { Icon } from '../components/Icon';
-import { SyncBadge, Banner, Loading } from '../components/ui';
+import { SyncBadge, Banner, Loading, EmptyState } from '../components/ui';
 import { EatSheet } from '../components/EatSheet';
 import { BuySheet } from '../components/BuySheet';
 
@@ -20,6 +20,25 @@ export function Home() {
   const [sheet, setSheet] = useState<'eat' | 'buy' | null>(null);
 
   if (!identity) return <Navigate to="/" replace />;
+
+  // Offline with nothing cached is a real state, not a loading screen that
+  // never resolves (PRD §41).
+  if (s && !s.view && s.status === 'offline') {
+    return (
+      <div className="screen screen--room">
+        <header className="topbar">
+          <span className="brand-dot" />
+          <span className="topbar__title">{identity.roomName}</span>
+          <SyncBadge status="offline" />
+        </header>
+        <EmptyState
+          icon="cloud_off"
+          title="No saved data on this device"
+          body="Connect once and Anda will cache this room for next time."
+        />
+      </div>
+    );
+  }
 
   if (!s || !s.view) {
     return (
