@@ -6,32 +6,52 @@ Narrow by design — if a flatmate needs instructions, it is still too complicat
 ## Repository layout
 
 ```
-docs/                          → engineering documentation (PRD §33)
+docs/                          → engineering documentation
 supabase/
-  migrations/                  → version-controlled PostgreSQL migrations (§25)
+  migrations/                  → version-controlled PostgreSQL migrations
   tests/                       → local-only validation suites (archival stubs + pgbench races)
   functions/
     _shared/                   → pure VAPID / payload / delivery helpers (unit-tested)
-    low-stock-notify/          → Deno Edge Function (§16/§17 delivery)
-web/                           → frontend: Vite + React + TypeScript + PWA (§19, §1)
-  src/lib/anda/                → realtime/offline store, transport, typed RPC API + tests
+    low-stock-notify/          → Deno Edge Function (low-stock delivery)
+web/                           → frontend: Vite + React + TypeScript + PWA
+  src/lib/anda/                → realtime/offline store, transport, typed RPC API
+  src/lib/anda/finance.ts      → money parsing, formatting, balance shaping
+  src/screens/                 → Landing, Create/Join/Sign in, Home, Activity, Account
+  src/components/              → sheets, stepper, bottom nav, swipe row, primitives
+  src/session/                 → identity, room store and auth for the whole app
 ```
 
-## Status (PRD §28 sequence)
+## Status
 
-- Phase 2 — Data model: **done** (migration `0001_initial_schema.sql`, validated locally).
-- Phase 3 — Room lifecycle: **done** (migration `0002_room_lifecycle.sql`; create/join/leave, host code-regeneration + soft-delete, device-bound identity, server-side authorization; 42 RPC-level tests).
-- Phase 4 — Ledger: **done** (migration `0003_ledger.sql`; purchases, usage, derived inventory, FIFO-costed liability, compensating corrections, history; 52 RPC-level tests).
-- Phase 5 — Atomicity: **done** (migration `0004_atomicity.sql`; room-row serialization extended to purchases (D19); real-concurrency verification via pgbench races A–F; 20 assertions; see `docs/atomicity.md`).
-- Phase 6 — Realtime: **done** (migration `0005_realtime.sql` publishes ledger tables; client store with room-scoped subscriptions, derived-state recompute, sync indicators, optimistic reconciliation; 8 store tests in `web/`; see `docs/realtime.md`).
-- Phase 7 — Offline persistence: **done** (IndexedDB via `idb`: durable cache, member identity, pending mutation queue; reconnect flush with server validation; rejected items surfaced never discarded; 5 offline tests incl. reload-persistence and last-egg conflict; see `docs/offline.md`).
-- Phase 8 — Notifications: **done** (migration `0006_notifications.sql`: `push_subscriptions` (room→member→device, owner-RLS), `low_stock_alerts` internal episode queue, same-transaction threshold-crossing state machine; Supabase Edge Function `low-stock-notify` + pure VAPID/payload helpers; 24 SQL + 8 unit tests; see `docs/notifications.md`).
-- Phase 9 — UX refinement: **done** (React UI on the solid store: Welcome/Create/Join screens, Dashboard with stock + member liability + low-stock warning + sync indicator, Usage and Purchase entry modals with stepper controls, History with correction links, Room info with leave flow; mobile-first PWA; see `web/src/screens/`).
-- Phase 10 — Full verification & deployment: next (end-to-end production-like deployment, cross-device testing, security boundary verification).
-- Phase 6 — Realtime (Supabase Realtime, room-scoped).
-- Phase 7 — Offline persistence (IndexedDB, pending queue, reconciliation).
-- Phase 8 — Notifications (Web Push, low-stock threshold crossing).
-- Phase 9 — UX refinement. Phase 10 — Full verification & deployment.
+Backend and platform (Phases 2–8 of the original plan) are unchanged and still
+validated by their own SQL suites:
+
+| Phase | State |
+|---|---|
+| Data model — `0001_initial_schema.sql` | done (43 schema checks) |
+| Room lifecycle — `0002_room_lifecycle.sql` | done (42 RPC checks) |
+| Ledger — `0003_ledger.sql` | done (52 RPC checks) |
+| Atomicity — `0004_atomicity.sql` | done (pgbench races A–F, 20 assertions — `docs/atomicity.md`) |
+| Realtime — `0005_realtime.sql` | done (`docs/realtime.md`) |
+| Offline persistence | done (`docs/offline.md`) |
+| Notifications — `0006_notifications.sql` | done (`docs/notifications.md`) |
+
+The UI/UX migration added three additive migrations on top:
+
+| Migration | Adds |
+|---|---|
+| `0007_identity_recovery.sql` | `my_memberships()` — recover rooms after signing in on a device with no local state |
+| `0008_purchase_unit_price.sql` | `purchases.unit_price_minor` (integer paise per egg, authoritative); `record_purchase` takes the unit price; liability returned in paise; `is_host` |
+| `0009_settlements_live.sql` | `settlements.amount_minor`, `record_settlement`, `member_outstanding_minor`, settlements in `room_history` and Realtime |
+
+None of these are destructive. `0008` backfills historical pricing from the
+total each purchase was recorded with, and the only dropped column is the
+`cost_per_egg` **generated** column, which is recomputed from the new source.
+See the migration headers for the reasoning and `docs/ui-migration-audit.md`
+for the pre-change inventory.
+
+Remaining: full production verification — cross-device testing and a security
+boundary pass (`docs/ui-migration.md` §6).
 
 ## Local validation
 
@@ -40,29 +60,46 @@ Requires PostgreSQL ≥ 13 (Supabase runs ≥ 15).
 ```bash
 createdb anda_test
 psql -X -d anda_test -f supabase/tests/local_auth_stub.sql
-psql -X -d anda_test -f supabase/migrations/0001_initial_schema.sql
-psql -X -d anda_test -f supabase/migrations/0002_room_lifecycle.sql
-psql -X -d anda_test -f supabase/migrations/0003_ledger.sql
-psql -X -d anda_test -f supabase/migrations/0004_atomicity.sql
-psql -X -d anda_test -f supabase/migrations/0005_realtime.sql
-psql -X -d anda_test -f supabase/migrations/0006_notifications.sql
-psql -X -d anda_test -f supabase/tests/schema_validation.sql   # Phase 2 gate (43 checks)
-psql -X -d anda_test -f supabase/tests/room_lifecycle.sql      # Phase 3 gate (42 checks)
-psql -X -d anda_test -f supabase/tests/ledger.sql              # Phase 4 gate (52 checks)
+for f in supabase/migrations/*.sql; do psql -X -d anda_test -f "$f"; done
+psql -X -d anda_test -f supabase/tests/schema_validation.sql   # 43 checks
+psql -X -d anda_test -f supabase/tests/room_lifecycle.sql      # 42 checks
+psql -X -d anda_test -f supabase/tests/ledger.sql              # 52 checks
 
-# Phase 5 gate — atomicity (requires pgbench, ships with PostgreSQL)
+# Atomicity gate (requires pgbench, ships with PostgreSQL)
 psql -X -v ON_ERROR_STOP=1 -d anda_test -f supabase/tests/atomicity_setup.sql
 # … generate scripts from supabase/tests/pgbench/*.tmpl.sql, run the pgbench
 # races (see docs/atomicity.md), then:
-psql -X -d anda_test -f supabase/tests/atomicity_assert.sql    # Phase 5 assertions (20 checks)
-psql -X -d anda_test -f supabase/tests/notifications.sql       # Phase 8 gate (24 checks)
+psql -X -d anda_test -f supabase/tests/atomicity_assert.sql    # 20 checks
+psql -X -d anda_test -f supabase/tests/notifications.sql       # 24 checks
+psql -X -d anda_test -f supabase/tests/identity_settlement.sql # 0007/0008/0009 (35 checks)
 
-# Local: install & run the web app (Phase 9 UI)
-cd web && npm install && npm run dev    # vite dev server (PWA-ready)
-
-# Test: all suites
-cd web && npm test                       # 21 tests: realtime (8), offline (5),
-                                         # low-stock push helpers (8)
+# Web app
+cd web && npm install
+npm run dev      # vite dev server (PWA-ready)
+npm test         # 65 tests: MVP journey (5), realtime (8), two-client
+                 # realtime (3), offline (5), identity/auth (16), money
+                 # boundary (16), optimistic reconciliation (4),
+                 # low-stock push helpers (8)
+npm run build    # tsc --noEmit && vite build (service worker generated)
 ```
 
-The stub is LOCAL ONLY and mirrors Supabase's `auth.uid()` so RLS policies can be exercised.
+The stub is LOCAL ONLY and mirrors Supabase's `auth.uid()` so RLS policies can
+be exercised.
+
+## Running without Supabase
+
+With `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` unset the app runs against
+an in-memory backend that mirrors the server's rules (derived inventory, no
+negative stock, FIFO liability, unit-price purchases, settlement cap). It
+starts **empty** — no rooms, members or balances — so nothing on screen is
+prototype data. The UI says when it is in this mode.
+
+## Environment
+
+Copy `web/.env.example` to `web/.env.local`:
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `VITE_SUPABASE_URL` | yes (production) | Supabase project URL |
+| `VITE_SUPABASE_ANON_KEY` | yes (production) | public anon key — never a service-role key |
+| `VITE_VAPID_PUBLIC_KEY` | no | Web Push low-stock alerts. The private half stays in Edge Function secrets. |

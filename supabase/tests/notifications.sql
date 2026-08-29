@@ -72,7 +72,7 @@ begin
     select v::uuid into v_room from public.anda_test_state where k='n1';
 
     -- above threshold: no alert, not flagged
-    perform public.record_purchase(v_room, 11, 88.00);             -- inv 11
+    perform public.record_purchase(v_room, 11, 800);             -- inv 11
     select count(*) into n from public.low_stock_alerts where room_id = v_room;
     select low_stock_notified into flagged from public.rooms where id = v_room;
     perform public.vtest(n = 0 and not flagged, 'N1a: 11 > threshold 10 → no alert, flag false');
@@ -91,7 +91,7 @@ begin
     perform public.vtest(n = 1 and flagged, 'N1c: 8 then 7 → still exactly one alert (no spam)');
 
     -- restock above threshold: flag re-arms, no new alert
-    perform public.record_purchase(v_room, 23, 184.00);            -- inv 30
+    perform public.record_purchase(v_room, 23, 800);            -- inv 30
     select count(*) into n from public.low_stock_alerts where room_id = v_room;
     select low_stock_notified into flagged from public.rooms where id = v_room;
     perform public.vtest(n = 1 and not flagged, 'N1d: back to 30 (>10) → flag reset, still one alert');
@@ -143,12 +143,12 @@ begin
     perform set_config('request.jwt.claim.sub', 'dddddddd-0000-0000-0000-0000000000d1', false);
     select v::uuid into v_room from public.anda_test_state where k='n2';
 
-    perform public.record_purchase(v_room, 5, 40.00);              -- inv 5 ≤ 10
+    perform public.record_purchase(v_room, 5, 800);              -- inv 5 ≤ 10
     select count(*) into n from public.low_stock_alerts where room_id = v_room;
     select low_stock_notified into flagged from public.rooms where id = v_room;
     perform public.vtest(n = 1 and flagged, 'N3a: starting at 5 → one alert for the episode');
 
-    perform public.record_purchase(v_room, 6, 48.00);              -- inv 11 > 10
+    perform public.record_purchase(v_room, 6, 800);              -- inv 11 > 10
     select count(*) into n from public.low_stock_alerts where room_id = v_room;
     select low_stock_notified into flagged from public.rooms where id = v_room;
     perform public.vtest(n = 1 and not flagged, 'N3b: restock to 11 → re-armed, still one alert');

@@ -35,7 +35,11 @@ function ledgerFixture(
       display_name: 'Me',
       is_active: true,
       consumed: meConsumed,
-      liability: meConsumed * 8,
+      is_host: true,
+      purchased_minor: 0,
+      liability_minor: meConsumed * 800,
+      settled_minor: 0,
+      outstanding_minor: meConsumed * 800,
     },
     {
       room_id: ROOM,
@@ -47,7 +51,11 @@ function ledgerFixture(
       display_name: 'Other',
       is_active: true,
       consumed: otherConsumed,
-      liability: otherConsumed * 8,
+      is_host: false,
+      purchased_minor: 0,
+      liability_minor: otherConsumed * 800,
+      settled_minor: 0,
+      outstanding_minor: otherConsumed * 800,
     },
   ];
 }
@@ -131,7 +139,7 @@ class FakeApi implements AndaApi {
     }
   }
 
-  async recordPurchase(roomId: string, quantity: number, _totalCost: number): Promise<void> {
+  async recordPurchase(roomId: string, quantity: number, _unitPriceMinor: number): Promise<void> {
     if (roomId !== ROOM) throw new Error('not a member of this room');
     this.inventory += quantity;
     if (this.transportB) {
@@ -265,7 +273,7 @@ describe('AndaStore — Phase 6 realtime (§12, §26, §27)', () => {
     await expect(store.recordUsage(99)).rejects.toThrow();
     expect(store.view?.inventory).toBe(20); // reverted
     expect(store.view?.members.find((m) => m.member_id === ME)?.consumed).toBe(4);
-    expect(store.lastError).toContain('not enough eggs remaining');
+    expect(store.lastError).toContain('Not enough eggs left');
     expect(store.status).toBe('synced'); // server truth restored
   });
 

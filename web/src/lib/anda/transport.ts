@@ -11,13 +11,15 @@ import type {
   RealtimeTransport,
 } from './types';
 
-// Tables published in migration 0005. `rooms` is filtered by its primary key
-// (`id`); every other table carries `room_id` (members, purchases, egg_usage).
+// Tables published in migrations 0005 (ledger) and 0009 (settlements).
+// `rooms` is filtered by its primary key (`id`); every other table carries
+// `room_id`. Settlements are included because they change what Account shows.
 const TABLES: Array<{ table: RealtimeTable; filter: (roomId: string) => string }> = [
   { table: 'rooms', filter: (id) => `id=eq.${id}` },
   { table: 'members', filter: (id) => `room_id=eq.${id}` },
   { table: 'purchases', filter: (id) => `room_id=eq.${id}` },
   { table: 'egg_usage', filter: (id) => `room_id=eq.${id}` },
+  { table: 'settlements', filter: (id) => `room_id=eq.${id}` },
 ];
 
 export function createSupabaseTransport(client: SupabaseClient): RealtimeTransport {

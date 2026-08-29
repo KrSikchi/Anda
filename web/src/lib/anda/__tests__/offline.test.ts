@@ -6,6 +6,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IdbRepo } from '../db';
 import { AndaStore } from '../store';
+import { loadIdentity, saveIdentity } from '../identity';
 import type {
   AndaApi,
   HistoryEntry,
@@ -61,7 +62,11 @@ function ledger(inventory: number, meConsumed = 0): LedgerMemberRow[] {
       display_name: 'Me',
       is_active: true,
       consumed: meConsumed,
-      liability: 0,
+      is_host: true,
+      purchased_minor: 0,
+      liability_minor: 0,
+      settled_minor: 0,
+      outstanding_minor: 0,
     },
   ];
 }
@@ -94,7 +99,7 @@ class FakeApi implements AndaApi {
     this.meConsumed += quantity;
   }
 
-  async recordPurchase(roomId: string, quantity: number, _totalCost: number): Promise<void> {
+  async recordPurchase(roomId: string, quantity: number, _unitPriceMinor: number): Promise<void> {
     if (this.networkFail) throw new Error('Failed to fetch');
     if (roomId !== ROOM) throw new Error('Anda: not a member of this room');
     this.inventory += quantity;
@@ -162,8 +167,8 @@ describe('AndaStore — Phase 7 offline (§14, §15, §27)', () => {
     // NOT silently discarded — surfaced with a clear explanation.
     expect(await repo.listPending()).toHaveLength(0);
     expect(store.rejected).toHaveLength(1);
-    expect(store.rejected[0].error).toContain('not enough eggs remaining');
-    expect(store.lastError).toContain('not enough eggs remaining');
+    expect(store.rejected[0].error).toContain('Not enough eggs left');
+    expect(store.lastError).toContain('Not enough eggs left');
     expect(store.state?.inventory).toBe(1); // authoritative
     expect(store.view?.inventory).toBe(1); // estimate fully reconciled
   });
@@ -180,8 +185,20 @@ describe('AndaStore — Phase 7 offline (§14, §15, §27)', () => {
     await s1.recordUsage(4);
     s1.dispose();
 
-    // Identity persisted to meta (device-bound, §4).
-    const identity = await repo.loadMeta<{ memberId: string; roomId: string }>('identity');
+    // Identity lives in exactly one place now: the identity module. The store
+    // used to also write meta/identity with a different shape, which let a
+    // device believe two different things after a partial write (PRD §33).
+    await saveIdentity({
+      roomId: ROOM,
+      roomName: 'Flat O',
+      shareCode: 'ABC123',
+      memberId: ME,
+      displayName: 'Me',
+      isHost: true,
+      lowStockThreshold: 10,
+      savedAt: Date.now(),
+    });
+    const identity = await loadIdentity();
     expect(identity?.memberId).toBe(ME);
     expect(identity?.roomId).toBe(ROOM);
 
@@ -229,7 +246,7 @@ describe('AndaStore — Phase 7 offline (§14, §15, §27)', () => {
     expect(store.state?.inventory).toBe(0);
     expect(store.state?.members[0].consumed).toBe(1);
     expect(store.rejected).toHaveLength(1);
-    expect(store.rejected[0].error).toContain('not enough eggs remaining');
+    expect(store.rejected[0].error).toContain('Not enough eggs left');
 
     // FIFO resolution independent of CRDT — deterministic, server-authoritative.
     void ({ pending: await repo.listPending() } satisfies { pending: PendingMutation[] });
