@@ -1,10 +1,11 @@
-// Anda — room-scoped realtime + offline store (PRD §7, §12–§15, §26)
+// Anda — room-scoped realtime + offline store (PRD §7, §12–§15, §26, §32)
 // React notification: every mutation bumps _version and calls _notify.
 
 import type {
   AndaApi,
   HistoryEntry,
   LedgerMemberRow,
+  Minor,
   OfflineRepo,
   PendingMutation,
   RealtimeEvent,
@@ -19,7 +20,7 @@ export interface StoreOptions {
   transport: RealtimeTransport;
   roomId: string;
   currentMemberId: string;
-  /** IndexedDB-backed offline repository (defaults to the shared instance). */
+  /** IndexedDB-backed offline repository (defaults to a no-op). */
   repo?: OfflineRepo;
 }
 
@@ -27,7 +28,7 @@ interface OverlayOp {
   id?: number;
   kind: 'usage' | 'purchase';
   quantity: number;
-  totalCost?: number;
+  unitPriceMinor?: Minor;
 }
 
 // Server validation failures (raised as 'Anda: …', §24). These are NEVER
@@ -39,9 +40,15 @@ const VALIDATION_MARKERS = [
   'already been corrected',
   'corrected amount',
   'quantity must be',
+  'price per egg cannot be',
   'total cost cannot be',
   'room not found',
   'not signed in',
+  'nothing left to settle',
+  'more than you owe',
+  'not in this room',
+  'choose a flatmate',
+  'more than zero',
 ];
 
 export function isValidationError(message: string): boolean {
@@ -67,8 +74,10 @@ export class AndaStore {
   lastError: string | null = null;
   /** Queued-but-unconfirmed mutations surfaced to the UI (never finished truth). */
   pending: OverlayOp[] = [];
-  /** Queue items the server rejected on flush — surfaced, never silently dropped (§15, §24). */
+  /** Queue items the server rejected on flush — surfaced, never dropped (§15, §24). */
   rejected: RejectedMutation[] = [];
+  /** True while a submit is awaiting the server (PRD §40 loading states). */
+  busy = false;
   /** Version counter for React useSyncExternalStore. */
   _version = 0;
   /** Called by the store after every state mutation to notify React. */
@@ -97,10 +106,6 @@ export class AndaStore {
     this.unsubscribe = this.transport.subscribe(this.roomId, {
       onEvent: (event) => this.onRealtimeEvent(event),
       onConnection: (connected) => this.onConnection(connected),
-    });
-    await this.repo.saveMeta('identity', {
-      memberId: this.currentMemberId,
-      roomId: this.roomId,
     });
     try {
       await this.refresh();
@@ -143,63 +148,91 @@ export class AndaStore {
     };
   }
 
-  /** §13/§14: usage — optimistic when online, queued when offline. */
+  /** §19/§32: Eat — optimistic, validated by the server, rolled back on reject. */
   async recordUsage(quantity: number): Promise<void> {
     if (this.isOffline()) {
       await this.enqueue({ kind: 'usage', roomId: this.roomId, quantity, createdAt: Date.now() });
       return;
     }
-    this.pending.push({ kind: 'usage', quantity });
-    this.status = 'syncing'; this.notify();
+    const op: OverlayOp = { kind: 'usage', quantity };
+    this.begin(op);
     try {
       await this.api.recordUsage(this.roomId, quantity);
-      this.dropFromOverlay({ kind: 'usage', quantity });
+      this.settle(op);
       await this.syncFromAuthoritative();
     } catch (err) {
+      this.rollback(op);
       const msg = toFriendly(err);
-      this.pending = [];
       if (isValidationError(msg)) {
-        this.lastError = msg;
-        this.status = this.connected ? 'synced' : 'offline'; this.notify();
+        await this.reconcileAfterRejection(msg);
         throw err;
       }
       await this.enqueue({ kind: 'usage', roomId: this.roomId, quantity, createdAt: Date.now() });
+    } finally {
+      this.busy = false;
+      this.notify();
     }
   }
 
-  /** §13/§14: purchase — optimistic when online, queued when offline. */
-  async recordPurchase(quantity: number, totalCost: number): Promise<void> {
+  /** §21/§32: Buy — quantity + unit price in paise. */
+  async recordPurchase(quantity: number, unitPriceMinor: Minor): Promise<void> {
     if (this.isOffline()) {
       await this.enqueue({
         kind: 'purchase',
         roomId: this.roomId,
         quantity,
-        totalCost,
+        unitPriceMinor,
         createdAt: Date.now(),
       });
       return;
     }
-    this.pending.push({ kind: 'purchase', quantity, totalCost });
-    this.status = 'syncing'; this.notify();
+    const op: OverlayOp = { kind: 'purchase', quantity, unitPriceMinor };
+    this.begin(op);
     try {
-      await this.api.recordPurchase(this.roomId, quantity, totalCost);
-      this.dropFromOverlay({ kind: 'purchase', quantity, totalCost });
+      await this.api.recordPurchase(this.roomId, quantity, unitPriceMinor);
+      this.settle(op);
       await this.syncFromAuthoritative();
     } catch (err) {
+      this.rollback(op);
       const msg = toFriendly(err);
-      this.pending = [];
       if (isValidationError(msg)) {
-        this.lastError = msg;
-        this.status = this.connected ? 'synced' : 'offline'; this.notify();
+        await this.reconcileAfterRejection(msg);
         throw err;
       }
       await this.enqueue({
         kind: 'purchase',
         roomId: this.roomId,
         quantity,
-        totalCost,
+        unitPriceMinor,
         createdAt: Date.now(),
       });
+    } finally {
+      this.busy = false;
+      this.notify();
+    }
+  }
+
+  /**
+   * §30: record that the current member has covered part of what they owe.
+   * Not optimistic — a settlement is a deliberate, confirmed money action and
+   * inventing a provisional balance would be a lie the server may contradict.
+   */
+  async recordSettlement(toMemberId: string, amountMinor: Minor): Promise<void> {
+    if (!this.api.recordSettlement) throw new Error('Settlements are unavailable');
+    this.busy = true;
+    this.status = 'syncing';
+    this.notify();
+    try {
+      await this.api.recordSettlement(this.roomId, toMemberId, amountMinor);
+      await this.syncFromAuthoritative();
+    } catch (err) {
+      this.lastError = toFriendly(err);
+      this.status = this.connected ? 'synced' : 'offline';
+      this.notify();
+      throw err;
+    } finally {
+      this.busy = false;
+      this.notify();
     }
   }
 
@@ -225,7 +258,7 @@ export class AndaStore {
     this.notify();
   }
 
-  /** Flush the durable pending queue through server validation (§15). */
+  /** Flush the durable pending queue through server validation (§15, §34). */
   async flushPending(): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
@@ -237,20 +270,25 @@ export class AndaStore {
           if (item.kind === 'usage') {
             await this.api.recordUsage(this.roomId, item.quantity);
           } else {
-            await this.api.recordPurchase(this.roomId, item.quantity, item.totalCost ?? 0);
+            await this.api.recordPurchase(
+              this.roomId,
+              item.quantity,
+              item.unitPriceMinor ?? 0,
+            );
           }
           if (item.id != null) await this.repo.removePending(item.id);
           this.dropFromOverlay(item);
         } catch (err) {
           const msg = toFriendly(err);
           if (isValidationError(msg)) {
+            // Authoritative rejection (§34): surface it, never silently drop.
             if (item.id != null) await this.repo.removePending(item.id);
             this.dropFromOverlay(item);
             this.rejected.push({
               kind: item.kind,
               roomId: item.roomId,
               quantity: item.quantity,
-              totalCost: item.totalCost,
+              unitPriceMinor: item.unitPriceMinor,
               error: msg,
               recordedAt: Date.now(),
             });
@@ -274,6 +312,11 @@ export class AndaStore {
     this._notify?.();
   }
 
+  dismissRejected(): void {
+    this.rejected = [];
+    this.notify();
+  }
+
   dispose(): void {
     this.closed = true;
     this.detachWindowListeners();
@@ -283,9 +326,38 @@ export class AndaStore {
 
   // -- internals ------------------------------------------------------------
 
+  /** Push the optimistic overlay and mark the mutation as in-flight (§32). */
+  private begin(op: OverlayOp): void {
+    this.pending.push(op);
+    this.busy = true;
+    this.status = 'syncing';
+    this.notify();
+  }
+
+  /** Server accepted: remove exactly this operation from the overlay. */
+  private settle(op: OverlayOp): void {
+    this.dropFromOverlay(op);
+  }
+
+  /**
+   * Roll back exactly this operation.
+   *
+   * The previous implementation cleared the whole overlay array on any
+   * rejection, which also discarded unrelated in-flight operations made
+   * moments earlier. Only the failed op is removed now.
+   */
+  private rollback(op: OverlayOp): void {
+    this.dropFromOverlay(op);
+  }
+
   private async enqueue(mutation: PendingMutation): Promise<void> {
     const id = await this.repo.enqueue(mutation);
-    this.pending.push({ id, kind: mutation.kind, quantity: mutation.quantity, totalCost: mutation.totalCost });
+    this.pending.push({
+      id,
+      kind: mutation.kind,
+      quantity: mutation.quantity,
+      unitPriceMinor: mutation.unitPriceMinor,
+    });
     this.status = 'offline';
     this.lastError = 'Offline — saved on this device';
     this.notify();
@@ -296,11 +368,34 @@ export class AndaStore {
     return !this.connected;
   }
 
+  /**
+   * A validation rejection means the server disagrees with what the screen is
+   * showing — usually because someone else moved first. Roll back the overlay,
+   * then re-read the authoritative snapshot before surfacing the reason, so
+   * the number on screen is never stale after a refusal (PRD §19 step 5, §32).
+   */
+  private async reconcileAfterRejection(message: string): Promise<void> {
+    try {
+      await this.syncFromAuthoritative();
+    } catch {
+      /* offline: keep the validation message below as the user-facing error */
+    }
+    this.lastError = message;
+    this.status = this.connected ? 'synced' : 'offline';
+    this.notify();
+  }
+
+  /** Remove the FIRST matching overlay entry only — never all of them. */
   private dropFromOverlay(op: OverlayOp): void {
-    this.pending = this.pending.filter((p) => {
-      if (op.id != null && p.id === op.id) return false;
-      return p.kind !== op.kind || p.quantity !== op.quantity;
+    const index = this.pending.findIndex((p) => {
+      if (op.id != null || p.id != null) return p.id === op.id;
+      return (
+        p.kind === op.kind &&
+        p.quantity === op.quantity &&
+        p.unitPriceMinor === op.unitPriceMinor
+      );
     });
+    if (index >= 0) this.pending.splice(index, 1);
   }
 
   private async hydratePending(): Promise<void> {
@@ -309,7 +404,7 @@ export class AndaStore {
       id: m.id,
       kind: m.kind,
       quantity: m.quantity,
-      totalCost: m.totalCost,
+      unitPriceMinor: m.unitPriceMinor,
     }));
     this.notify();
   }
@@ -337,6 +432,8 @@ export class AndaStore {
 
   private async onRealtimeEvent(event: RealtimeEvent): Promise<void> {
     if (this.closed) return;
+    // Room scoping is enforced server-side by RLS and by the channel filter;
+    // this is defence in depth so a stray event can never repaint the room.
     const rowRoom = String(event.row.room_id ?? event.row.id ?? '');
     if (rowRoom !== this.roomId) return;
     await this.syncFromAuthoritative();

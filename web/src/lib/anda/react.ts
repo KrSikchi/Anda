@@ -1,21 +1,24 @@
 // Anda — React hook that re-renders on store changes (useSyncExternalStore).
+// Null-tolerant: screens render before a room exists, so the hook is always
+// called and simply no-ops while there is no store.
 
 import { useSyncExternalStore, useCallback } from 'react';
 import type { AndaStore } from './store';
 
-function getSnapshot(store: AndaStore): number {
-  return store._version;
-}
+const NOOP = () => () => {};
 
-function subscribe(store: AndaStore, cb: () => void): () => void {
-  store._notify = cb;
-  return () => { store._notify = undefined; };
-}
-
-/** Subscribe a React component to store state. Re-renders on every change. */
-export function useAndaStore(store: AndaStore): AndaStore {
-  const sub = useCallback((cb: () => void) => subscribe(store, cb), [store]);
-  const snap = useCallback(() => getSnapshot(store), [store]);
-  useSyncExternalStore(sub, snap, snap);
+export function useAndaStore(store: AndaStore | null): AndaStore | null {
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      if (!store) return NOOP();
+      store._notify = cb;
+      return () => {
+        store._notify = undefined;
+      };
+    },
+    [store],
+  );
+  const snapshot = useCallback(() => (store ? store._version : 0), [store]);
+  useSyncExternalStore(subscribe, snapshot, snapshot);
   return store;
 }

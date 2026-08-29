@@ -1,0 +1,4 @@
+# Deep-link support for the SPA shell (PRD §9).
+# /room/<id>/account and friends are client routes; without this a hard
+# refresh on Cloudflare Pages or Netlify would 404.
+/*    /index.html   200
