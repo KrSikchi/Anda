@@ -167,8 +167,8 @@ describe('AndaStore — Phase 7 offline (§14, §15, §27)', () => {
     // NOT silently discarded — surfaced with a clear explanation.
     expect(await repo.listPending()).toHaveLength(0);
     expect(store.rejected).toHaveLength(1);
-    expect(store.rejected[0].error).toContain('not enough eggs remaining');
-    expect(store.lastError).toContain('not enough eggs remaining');
+    expect(store.rejected[0].error).toContain('Not enough eggs left');
+    expect(store.lastError).toContain('Not enough eggs left');
     expect(store.state?.inventory).toBe(1); // authoritative
     expect(store.view?.inventory).toBe(1); // estimate fully reconciled
   });
@@ -246,7 +246,7 @@ describe('AndaStore — Phase 7 offline (§14, §15, §27)', () => {
     expect(store.state?.inventory).toBe(0);
     expect(store.state?.members[0].consumed).toBe(1);
     expect(store.rejected).toHaveLength(1);
-    expect(store.rejected[0].error).toContain('not enough eggs remaining');
+    expect(store.rejected[0].error).toContain('Not enough eggs left');
 
     // FIFO resolution independent of CRDT — deterministic, server-authoritative.
     void ({ pending: await repo.listPending() } satisfies { pending: PendingMutation[] });

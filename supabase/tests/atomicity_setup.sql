@@ -22,7 +22,7 @@ begin
     -- Race A room: stock 2 (the PRD §11 canonical scenario)
     select r.room_id into v_room from public.create_room('Race A', 'Host A', 10) r;
     insert into public.anda_test_state values ('ra_room', v_room::text);
-    perform public.record_purchase(v_room, 2, 10.00);
+    perform public.record_purchase(v_room, 2, 500)   -- ₹5.00 per egg;
 
     -- Race B room: zero stock
     select r.room_id into v_room from public.create_room('Race B', 'Host B', 10) r;
@@ -35,7 +35,7 @@ begin
     -- Race D room: stock 24, then 300 attempts to use 1
     select r.room_id into v_room from public.create_room('Race D', 'Host D', 10) r;
     insert into public.anda_test_state values ('rd_room', v_room::text);
-    perform public.record_purchase(v_room, 24, 120.00);
+    perform public.record_purchase(v_room, 24, 500)  -- ₹5.00 per egg;
 
     -- Race E room: mixed concurrent purchases + usage
     select r.room_id into v_room from public.create_room('Race E', 'Host E', 10) r;
@@ -44,7 +44,7 @@ begin
     -- Race F room: purchase 10, member J uses 5 (to be corrected twice concurrently)
     select r.room_id into v_room from public.create_room('Race F', 'Host F', 10) r;
     insert into public.anda_test_state values ('rf_room', v_room::text);
-    perform public.record_purchase(v_room, 10, 60.00);
+    perform public.record_purchase(v_room, 10, 600)  -- ₹6.00 per egg;
 end $$;
 
 do $$

@@ -60,7 +60,7 @@ Requires PostgreSQL ≥ 13 (Supabase runs ≥ 15).
 ```bash
 createdb anda_test
 psql -X -d anda_test -f supabase/tests/local_auth_stub.sql
-for f in supabase/migrations/0*.sql; do psql -X -d anda_test -f "$f"; done
+for f in supabase/migrations/*.sql; do psql -X -d anda_test -f "$f"; done
 psql -X -d anda_test -f supabase/tests/schema_validation.sql   # 43 checks
 psql -X -d anda_test -f supabase/tests/room_lifecycle.sql      # 42 checks
 psql -X -d anda_test -f supabase/tests/ledger.sql              # 52 checks
@@ -71,11 +71,12 @@ psql -X -v ON_ERROR_STOP=1 -d anda_test -f supabase/tests/atomicity_setup.sql
 # races (see docs/atomicity.md), then:
 psql -X -d anda_test -f supabase/tests/atomicity_assert.sql    # 20 checks
 psql -X -d anda_test -f supabase/tests/notifications.sql       # 24 checks
+psql -X -d anda_test -f supabase/tests/identity_settlement.sql # 0007/0008/0009 (31 checks)
 
 # Web app
 cd web && npm install
 npm run dev      # vite dev server (PWA-ready)
-npm test         # 45 tests: MVP journey (4), realtime (8), offline (5),
+npm test         # 46 tests: MVP journey (5), realtime (8), offline (5),
                  # money boundary (16), optimistic reconciliation (4),
                  # low-stock push helpers (8)
 npm run build    # tsc --noEmit && vite build (service worker generated)

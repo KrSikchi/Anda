@@ -1,7 +1,9 @@
 -- ============================================================================
 -- Anda — Phase 4 ledger test suite (LOCAL ONLY)
 -- ----------------------------------------------------------------------------
--- Run after: local_auth_stub.sql, 0001, 0002, 0003
+-- Run after: local_auth_stub.sql, 0001..0009
+--   (0008 changed record_purchase to take the unit price in paise and
+--    room_ledger to return liability_minor in paise.)
 --   psql -X -d <db> -f supabase/tests/ledger.sql
 --
 -- Covers the PRD §27 inventory rows at the RPC boundary:
@@ -11,11 +13,12 @@
 --   non-members and inactive members / cross-room isolation / history.
 --
 -- Fixture numbers (see migration 0003 header for the design):
---   purchases: 30 eggs @ ₹8 (total 240), 12 eggs @ ₹5 (total 60)   → 42 eggs
+--   purchases: 30 eggs @ 800 paise (₹8), 12 eggs @ 500 paise (₹5) → 42 eggs
 --   usage H4, J12(corrected→2), S6, S25, Y5(corrected→3), Z2(leaves)
 --   effective usage totals: H4 J2 S31 Y3 Z2 → 42 → inventory 0
 --   FIFO liability (batch1 30 @ 8, batch2 12 @ 5):
---     H 4×8=32   J 2×8=16   Y 3×8=24   Z 2×8=16   S 19×8 + 12×5 = 212
+--     liabilities in PAISE: H 4×800=3200  J 2×800=1600  Y 3×500=1500
+--                           Z 2×500=1000  S 24×800 + 7×500 = 22700
 -- ============================================================================
 \set ON_ERROR_STOP off
 
@@ -82,7 +85,7 @@ begin
 
     -- P1: 30 @ 240 → ₹8/egg (own transaction → own timestamp)
     select r.quantity, r.cost_per_egg into v_qty, v_cpe
-    from public.record_purchase(v_room, 30, 240) r;
+    from public.record_purchase(v_room, 30, 800) r;   -- 30 eggs @ ₹8.00 = 800 paise each
     perform public.vtest(v_qty = 30, 'T1a: purchase P1 quantity 30');
     perform public.vtest(v_cpe = 8.0, 'T1b: P1 cost_per_egg derived = 240/30 = 8');
 
@@ -98,7 +101,7 @@ begin
 
     -- P2: 12 @ 60 → ₹5/egg, price changed since last purchase (own transaction)
     select r.quantity, r.cost_per_egg into v_qty, v_cpe
-    from public.record_purchase(v_room, 12, 60) r;
+    from public.record_purchase(v_room, 12, 500) r;   -- 12 eggs @ ₹5.00 = 500 paise each
     perform public.vtest(v_qty = 12 and v_cpe = 5.0, 'T1d: P2 keeps its own price (60/12 = 5)');
 
     select inventory into v_inv_after from public.room_ledger(v_room) limit 1;
@@ -106,7 +109,7 @@ begin
 
     -- validation
     begin
-        perform public.record_purchase(v_room, 0, 10);
+        perform public.record_purchase(v_room, 0, 800);
         perform public.vtest(false, 'T1f: purchase quantity 0 rejected');
     exception when others then
         perform public.vtest(sqlerrm like '%Anda: quantity must be a positive number%', 'T1f: purchase quantity 0 rejected');
@@ -115,7 +118,7 @@ begin
         perform public.record_purchase(v_room, 10, -2);
         perform public.vtest(false, 'T1g: negative total cost rejected');
     exception when others then
-        perform public.vtest(sqlerrm like '%Anda: total cost cannot be negative%', 'T1g: negative total cost rejected');
+        perform public.vtest(sqlerrm like '%Anda: price per egg cannot be negative%', 'T1g: negative price per egg rejected');
     end;
 end $$;
 
@@ -200,12 +203,12 @@ begin
     select v::uuid into v_room from public.anda_test_state where k='ledger_room';
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a1', false);
 
-    select liability into v_h from public.room_ledger(v_room) where display_name = 'Host L';
-    select liability into v_j from public.room_ledger(v_room) where display_name = 'Jaya';
-    select liability into v_s from public.room_ledger(v_room) where display_name = 'Sam';
-    perform public.vtest(v_h = 32.00, 'T5a: Host L liability = 4 × ₹8 = 32.00');
-    perform public.vtest(v_j = 16.00, 'T5b: Jaya liability = 2 × ₹8 = 16.00');
-    perform public.vtest(v_s = 48.00, 'T5c: Sam liability = 6 × ₹8 = 48.00 (batch 1 still covers all)');
+    select liability_minor into v_h from public.room_ledger(v_room) where display_name = 'Host L';
+    select liability_minor into v_j from public.room_ledger(v_room) where display_name = 'Jaya';
+    select liability_minor into v_s from public.room_ledger(v_room) where display_name = 'Sam';
+    perform public.vtest(v_h = 3200, 'T5a: Host L liability = 4 × 800 = 3200 paise (₹32.00)');
+    perform public.vtest(v_j = 1600, 'T5b: Jaya liability = 2 × 800 = 1600 paise (₹16.00)');
+    perform public.vtest(v_s = 4800, 'T5c: Sam liability = 6 × 800 = 4800 paise (₹48.00) (batch 1 still covers all)');
 
     -- cross into batch 2: Sam uses 25 more → effective 31
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a3', false);
@@ -213,14 +216,14 @@ begin
     select inventory into v_inv from public.room_ledger(v_room) limit 1;
     perform public.vtest(v_inv = 5, 'T5d: after Sam +25 → inventory 5');
 
-    select liability into v_s from public.room_ledger(v_room) where display_name = 'Sam';
-    perform public.vtest(v_s = 227.00, 'T5e: Sam = 24×8 + 7×5 = 192 + 35 = 227.00');
-    select liability into v_j from public.room_ledger(v_room) where display_name = 'Jaya';
-    select liability into v_h from public.room_ledger(v_room) where display_name = 'Host L';
-    select sum(liability) into v_total from public.room_ledger(v_room);
+    select liability_minor into v_s from public.room_ledger(v_room) where display_name = 'Sam';
+    perform public.vtest(v_s = 22700, 'T5e: Sam = 24×800 + 7×500 = 19200 + 3500 = 22700 paise (₹227.00)');
+    select liability_minor into v_j from public.room_ledger(v_room) where display_name = 'Jaya';
+    select liability_minor into v_h from public.room_ledger(v_room) where display_name = 'Host L';
+    select sum(liability_minor) into v_total from public.room_ledger(v_room);
     perform public.vtest(
-        v_total = 30*8 + 7*5,
-        'T5f: total liability = batch1(30×8) + batch2(7×5) = 275.00 — deterministic FIFO sum');
+        v_total = 30*800 + 7*500,
+        'T5f: total liability = batch1(30×800) + batch2(7×500) = 27500 paise (₹275.00) — deterministic FIFO sum');
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -321,11 +324,11 @@ declare v_room uuid; v_y numeric; v_s numeric;
 begin
     select v::uuid into v_room from public.anda_test_state where k='ledger_room';
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a1', false);
-    select liability into v_y from public.room_ledger(v_room) where display_name = 'Yuki';
-    select liability into v_s from public.room_ledger(v_room) where display_name = 'Sam';
+    select liability_minor into v_y from public.room_ledger(v_room) where display_name = 'Yuki';
+    select liability_minor into v_s from public.room_ledger(v_room) where display_name = 'Sam';
     -- Yuki's eggs come from batch 2 AFTER Sam's event drained batch 1
-    perform public.vtest(v_y = 15.00, 'T8a: Yuki liability = 3 × ₹5 = 15.00 (batch 2, after Sam)');
-    perform public.vtest(v_s = 227.00, 'T8b: Sam liability = 24 × ₹8 + 7 × ₹5 = 227.00');
+    perform public.vtest(v_y = 1500, 'T8a: Yuki liability = 3 × 500 = 1500 paise (₹15.00) (batch 2, after Sam)');
+    perform public.vtest(v_s = 22700, 'T8b: Sam liability = 24 × 800 + 7 × 500 = 22700 paise (₹227.00)');
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -357,12 +360,12 @@ begin
 
     -- Final FIFO: events H4(t1) J2(t2) S6(t3) S25(t4) Y3(t5) Z2(t6);
     -- B1 (30@8): H4+J2+S6+S18 → S has 24 from B1; B2 (12@5): S7+Y3+Z2
-    select liability into v_z from public.room_ledger(v_room) where display_name = 'Zoe';
-    select liability into v_s from public.room_ledger(v_room) where display_name = 'Sam';
+    select liability_minor into v_z from public.room_ledger(v_room) where display_name = 'Zoe';
+    select liability_minor into v_s from public.room_ledger(v_room) where display_name = 'Sam';
     -- chronological events: … S25 (t4) drains B1 then takes 7 from B2; Y3 (t5),
     -- Z2 (t6) take the remaining B2 eggs at ₹5 → S stays 227.00, Z = 10.00
-    perform public.vtest(v_z = 10.00, 'T9c: Zoe liability = 2 × ₹5 = 10.00 (batch 2, after Sam/Yuki)');
-    perform public.vtest(v_s = 227.00, 'T9d: Sam liability = 24 × ₹8 + 7 × ₹5 = 227.00');
+    perform public.vtest(v_z = 1000, 'T9c: Zoe liability = 2 × 500 = 1000 paise (₹10.00) (batch 2, after Sam/Yuki)');
+    perform public.vtest(v_s = 22700, 'T9d: Sam liability = 24 × 800 + 7 × 500 = 22700 paise (₹227.00)');
 end $$;
 
 -- As Zoe (now inactive): writes are rejected (§6)
@@ -390,7 +393,7 @@ begin
     -- Device W (not a member here) cannot purchase or use
     perform set_config('request.jwt.claim.sub', 'bbbbbbbb-0000-0000-0000-0000000000a6', false);
     begin
-        perform public.record_purchase(v_room, 10, 80);
+        perform public.record_purchase(v_room, 10, 800);
         perform public.vtest(false, 'T10a: non-member purchase rejected');
     exception when others then
         perform public.vtest(sqlerrm like '%Anda: not a member of this room%', 'T10a: non-member purchase rejected');

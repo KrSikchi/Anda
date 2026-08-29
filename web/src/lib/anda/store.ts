@@ -14,6 +14,7 @@ import type {
   RoomSnapshot,
   SyncStatus,
 } from './types';
+import { friendlyError, isRoomUnavailableError, isSessionError } from './errors';
 
 export interface StoreOptions {
   api: AndaApi;
@@ -73,10 +74,22 @@ export class AndaStore {
   rejected: RejectedMutation[] = [];
   /** True while a submit is awaiting the server (PRD §40 loading states). */
   busy = false;
+  /**
+   * The server has told us this room is gone (soft-deleted, or we are no
+   * longer a member). Reaching the server is what established that, so it is
+   * NOT the same as being offline — the room must not be shown from cache.
+   */
+  roomUnavailable = false;
   /** Version counter for React useSyncExternalStore. */
   _version = 0;
   /** Called by the store after every state mutation to notify React. */
   _notify: (() => void) | undefined;
+  /**
+   * Called once when the server tells us this room is gone. A callback rather
+   * than a flag read during render: the session provider does not subscribe to
+   * store mutations (that would re-render the whole tree on every keystroke).
+   */
+  onRoomUnavailable: (() => void) | undefined;
 
   private readonly api: AndaApi;
   private readonly transport: RealtimeTransport;
@@ -107,7 +120,13 @@ export class AndaStore {
       await this.hydratePending();
       if (this.connected) await this.flushPending();
       this.status = this.connected ? 'synced' : 'syncing'; this.notify();
-    } catch (_err) {
+    } catch (err) {
+      // A room we are no longer part of must not be repainted from cache —
+      // that would show a dead room as if it were merely offline (PRD §39).
+      if (isRoomUnavailableError(toFriendly(err))) {
+        this.markRoomUnavailable();
+        return;
+      }
       await this.hydrateFromCache();
       await this.hydratePending();
       this.lastError = 'Offline — saved on this device';
@@ -162,6 +181,14 @@ export class AndaStore {
         await this.reconcileAfterRejection(msg);
         throw err;
       }
+      // A dead session will fail identically on every retry, so queueing it
+      // would just build a backlog the user cannot clear (PRD §39).
+      if (isSessionError(msg)) {
+        this.lastError = friendlyError(msg);
+        this.status = this.connected ? 'synced' : 'offline';
+        this.notify();
+        throw err;
+      }
       await this.enqueue({ kind: 'usage', roomId: this.roomId, quantity, createdAt: Date.now() });
     } finally {
       this.busy = false;
@@ -192,6 +219,12 @@ export class AndaStore {
       const msg = toFriendly(err);
       if (isValidationError(msg)) {
         await this.reconcileAfterRejection(msg);
+        throw err;
+      }
+      if (isSessionError(msg)) {
+        this.lastError = friendlyError(msg);
+        this.status = this.connected ? 'synced' : 'offline';
+        this.notify();
         throw err;
       }
       await this.enqueue({
@@ -284,10 +317,10 @@ export class AndaStore {
               roomId: item.roomId,
               quantity: item.quantity,
               unitPriceMinor: item.unitPriceMinor,
-              error: msg,
+              error: friendlyError(msg),
               recordedAt: Date.now(),
             });
-            this.lastError = msg;
+            this.lastError = friendlyError(msg);
             this.notify();
             continue;
           }
@@ -375,7 +408,7 @@ export class AndaStore {
     } catch {
       /* offline: keep the validation message below as the user-facing error */
     }
-    this.lastError = message;
+    this.lastError = friendlyError(message);
     this.status = this.connected ? 'synced' : 'offline';
     this.notify();
   }
@@ -440,9 +473,27 @@ export class AndaStore {
       await this.refresh();
       this.status = this.connected ? 'synced' : 'syncing'; this.notify();
     } catch (err) {
-      this.lastError = toFriendly(err);
+      const message = toFriendly(err);
+      // Losing membership mid-session (removed, or the room was deleted) is
+      // picked up here because every realtime event re-reads the room.
+      if (isRoomUnavailableError(message)) {
+        this.markRoomUnavailable();
+        return;
+      }
+      this.lastError = friendlyError(message);
       this.status = this.connected ? 'synced' : 'offline'; this.notify();
     }
+  }
+
+  private markRoomUnavailable(): void {
+    this.roomUnavailable = true;
+    this.onRoomUnavailable?.();
+    this.state = null;
+    this.history = null;
+    this.pending = [];
+    this.lastError = null;
+    this.status = 'offline';
+    this.notify();
   }
 
   private onConnection(connected: boolean): void {

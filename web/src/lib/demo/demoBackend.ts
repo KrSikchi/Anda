@@ -146,6 +146,11 @@ export function createDemoBackend(): DemoBackend {
   }
 
   function requireMember(roomId: string): DemoMember {
+    // Room first, so a room this instance has never seen answers the same way
+    // production does — the room is gone, not the session. (A real Supabase
+    // session survives a reload; this in-memory one does not, so without this
+    // a reopened app would be told "not signed in" instead.)
+    roomOf(roomId);
     if (!sessionMemberId) throw new AndaError('not signed in');
     const member = members.get(sessionMemberId);
     if (!member || member.roomId !== roomId || !member.isActive) {

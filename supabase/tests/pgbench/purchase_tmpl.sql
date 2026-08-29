@@ -2,3 +2,4 @@
 -- __KEY__ = anda_test_state key of the room; __QTY__; __COST__.
 SET request.jwt.claim.sub = 'cccccccc-0000-0000-0000-0000000000c1';
 SELECT public.record_purchase((SELECT v::uuid FROM public.anda_test_state WHERE k = '__KEY__'), __QTY__, __COST__);
+-- __COST__ is the price per egg in PAISE (migration 0008).

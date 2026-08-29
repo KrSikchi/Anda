@@ -273,7 +273,7 @@ describe('AndaStore — Phase 6 realtime (§12, §26, §27)', () => {
     await expect(store.recordUsage(99)).rejects.toThrow();
     expect(store.view?.inventory).toBe(20); // reverted
     expect(store.view?.members.find((m) => m.member_id === ME)?.consumed).toBe(4);
-    expect(store.lastError).toContain('not enough eggs remaining');
+    expect(store.lastError).toContain('Not enough eggs left');
     expect(store.status).toBe('synced'); // server truth restored
   });
 

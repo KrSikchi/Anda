@@ -225,6 +225,14 @@ export function Account() {
         </div>
       )}
 
+      {account.members.filter((m) => m.isActive && !m.isCurrentMember).length === 0 ? (
+        <Card>
+          <p className="muted center">
+            You're the only one here. Share the room code above and flatmates can join.
+          </p>
+        </Card>
+      ) : null}
+
       {you && you.outstandingMinor > 0 && counterparty ? (
         <p className="muted center" style={{ marginTop: 12 }}>
           Swipe your row to record a settlement with {counterparty.display_name}. Anda only

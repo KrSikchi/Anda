@@ -14,6 +14,7 @@ import { QuantityStepper } from './QuantityStepper';
 import { Button, Banner, TextInput } from './ui';
 import { useSession } from '../session/SessionProvider';
 import { useAndaStore } from '../lib/anda/react';
+import { friendlyError } from '../lib/anda/errors';
 import {
   formatMinor,
   parseMoneyToMinor,
@@ -43,7 +44,7 @@ export function BuySheet({ onClose }: { onClose: () => void }) {
     } catch (err) {
       setError(
         err instanceof Error && err.message
-          ? err.message
+          ? friendlyError(err.message)
           : 'Could not record that purchase. Try again.',
       );
       setBusy(false);

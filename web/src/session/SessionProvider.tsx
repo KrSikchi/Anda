@@ -40,6 +40,9 @@ interface SessionValue {
   booting: boolean;
   /** Rooms recovered from a signed-in identity (PRD §17). */
   recovered: MembershipSummary[];
+  /** Why the user was returned to the landing page, when there is a reason. */
+  notice: string | null;
+  clearNotice(): void;
   enterRoom(membership: RoomMembership, opts?: { isHost?: boolean }): Promise<void>;
   enterRecovered(membership: MembershipSummary): Promise<void>;
   leaveRoom(): Promise<void>;
@@ -79,6 +82,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [store, setStore] = useState<AndaStore | null>(null);
   const [booting, setBooting] = useState(true);
   const [recovered, setRecovered] = useState<MembershipSummary[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const disposed = useRef(false);
 
   // Restore identity from IndexedDB and read the current auth state.
@@ -117,6 +121,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       roomId: identity.roomId,
       currentMemberId: identity.memberId,
     });
+
+    // The server has told us this room is gone (deleted, or we were removed).
+    // Drop the local identity rather than leave the user looking at a dead
+    // room, and say why they are back on the landing page (PRD §39).
+    next.onRoomUnavailable = () => {
+      void (async () => {
+        await clearIdentity();
+        if (disposed.current) return;
+        setIdentity(null);
+        setNotice('That room is no longer available. Join with a code to get back in.');
+      })();
+    };
+
     setStore(next);
     void next.init();
     return () => {
@@ -178,6 +195,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [backend, identity]);
 
   const clearRecovered = useCallback(() => setRecovered([]), []);
+  const clearNotice = useCallback(() => setNotice(null), []);
 
   // A signed-in identity with no local room can recover its rooms from the
   // server (PRD §17, §51). Runs once per auth state, never on a cold anon boot.
@@ -202,6 +220,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       store,
       booting,
       recovered,
+      notice,
+      clearNotice,
       enterRoom,
       enterRecovered,
       leaveRoom,
@@ -216,6 +236,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       store,
       booting,
       recovered,
+      notice,
+      clearNotice,
       enterRoom,
       enterRecovered,
       leaveRoom,

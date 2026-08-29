@@ -13,6 +13,7 @@ import { QuantityStepper } from './QuantityStepper';
 import { Button, Banner } from './ui';
 import { useSession } from '../session/SessionProvider';
 import { useAndaStore } from '../lib/anda/react';
+import { friendlyError } from '../lib/anda/errors';
 
 export function EatSheet({ onClose }: { onClose: () => void }) {
   const { store } = useSession();
@@ -33,7 +34,7 @@ export function EatSheet({ onClose }: { onClose: () => void }) {
     } catch (err) {
       setError(
         err instanceof Error && err.message
-          ? err.message
+          ? friendlyError(err.message)
           : 'Could not record that. Try again.',
       );
       setBusy(false);

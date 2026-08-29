@@ -157,7 +157,7 @@ describe('optimistic reconciliation (§32)', () => {
 
     await expect(store.recordUsage(5)).rejects.toThrow();
 
-    expect(store.lastError).toContain('not enough eggs remaining');
+    expect(store.lastError).toContain('Not enough eggs left');
     expect(store.pending).toHaveLength(0);
     expect(store.view?.inventory).toBe(1);
     expect(store.status).toBe('synced');

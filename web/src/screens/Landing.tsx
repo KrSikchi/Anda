@@ -6,11 +6,12 @@
 
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useSession } from '../session/SessionProvider';
-import { Button, Card, Loading, Avatar } from '../components/ui';
+import { Button, Card, Loading, Avatar, Banner } from '../components/ui';
 import { Icon } from '../components/Icon';
 
 export function Landing() {
-  const { identity, booting, recovered, enterRecovered, backend, auth } = useSession();
+  const { identity, booting, recovered, enterRecovered, backend, auth, notice, clearNotice } =
+    useSession();
   const navigate = useNavigate();
 
   if (booting) {
@@ -26,6 +27,14 @@ export function Landing() {
 
   return (
     <div className="landing">
+      {notice ? (
+        <div style={{ marginBottom: 24, textAlign: 'left' }}>
+          <Banner tone="info" icon="info" onDismiss={clearNotice}>
+            {notice}
+          </Banner>
+        </div>
+      ) : null}
+
       <div className="landing__mark">🥚</div>
       <h1 className="landing__title">Anda</h1>
       <p className="landing__tagline">Eggs, sorted.</p>

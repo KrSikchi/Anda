@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';
-import { clearIdentity } from '../lib/anda/identity';
+import { clearIdentity, loadIdentity } from '../lib/anda/identity';
 
 function renderApp(path = '/') {
   return render(
@@ -178,47 +178,43 @@ describe('Anda MVP journey (§57)', () => {
     );
   });
 
-  it('keeps the room across a reload and rejects an unknown join code (§14, §39, §51)', async () => {
-    const first = renderApp('/');
+  it('remembers the room on this device and explains when a room is gone (§11, §39, §51)', async () => {
+    renderApp('/');
     await createRoom('Persisted Flat', 'Ada');
+    // Read the code while it is still on screen, before entering the room.
+    const code = document.querySelector('.sharecode__value')?.textContent ?? '';
+    expect(code).toMatch(/^[A-Z0-9]{6}$/);
+
     fireEvent.click(screen.getByRole('button', { name: /^Go to Persisted Flat$/ }));
     await waitFor(() => expect(screen.getByText('Eggs Remaining')).toBeTruthy());
 
-    const code = document.querySelector('.sharecode__value')?.textContent ?? '';
-    first.unmount();
+    // The device remembers which room it is in, so reopening Anda does not
+    // ask again (PRD §11).
+    const saved = await loadIdentity();
+    expect(saved?.roomId).toBeTruthy();
+    expect(saved?.shareCode).toBe(code);
+    expect(saved?.displayName).toBe('Ada');
 
-    // Re-mount: the local identity restores the room (PRD §11).
+    // A fresh process: the saved room is asked about again.
+    cleanup();
+
+    // This room no longer answers for this device. It must NOT be repainted
+    // from cache as if it were merely offline — the user is returned to the
+    // landing page and told why (PRD §39).
     renderApp('/');
-    await waitFor(() => expect(screen.getByText('Eggs Remaining')).toBeTruthy(), {
+    await waitFor(() => expect(screen.getByText('Eggs, sorted.')).toBeTruthy(), {
       timeout: 3000,
     });
-    expect(screen.getByText('Persisted Flat')).toBeTruthy();
+    expect(screen.getByText(/no longer available/i)).toBeTruthy();
+  });
 
-    // An unknown code is rejected with plain copy, never a raw error.
-    localStorage.clear();
-    location.hash = '';
-    const second = renderApp('/join-room');
+  it('rejects an unknown room code with plain copy, never a raw error (§14, §39)', async () => {
+    renderApp('/join-room');
     await fill(/Room code/, 'ZZZZZZ');
     await fill(/Your name/, 'Nobody');
     fireEvent.click(screen.getByRole('button', { name: 'Join Room' }));
 
-    await waitFor(() =>
-      expect(
-        screen.getByText(/does not match an active room/i),
-      ).toBeTruthy(),
-    );
-    second.unmount();
-
-    // And the real code still works.
-    const third = renderApp('/join-room');
-    await fill(/Room code/, code);
-    await fill(/Your name/, 'Bea');
-    fireEvent.click(screen.getByRole('button', { name: 'Join Room' }));
-    await waitFor(() => expect(screen.getByText('Eggs Remaining')).toBeTruthy(), {
-      timeout: 3000,
-    });
-    expect(screen.getByText('Persisted Flat')).toBeTruthy();
-    third.unmount();
+    await waitFor(() => expect(screen.getByText(/does not match an active room/i)).toBeTruthy());
   });
 
   it('has exactly three bottom-navigation destinations (§6)', async () => {

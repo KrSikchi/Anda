@@ -77,15 +77,16 @@ Supplying the Stitch `code.html` style blocks would let the tokens in
 
 | Item | Note |
 |---|---|
-| SQL suites not run here | No PostgreSQL in the authoring sandbox. Run `supabase/tests/` locally before applying 0007–0009 (PRD §43). |
+| SQL suites not executed here | No PostgreSQL in the authoring sandbox. `supabase/tests/identity_settlement.sql` (31 checks for 0007/0008/0009) is written and ready, and `ledger.sql`, `atomicity_setup.sql` and `notifications.sql` were updated to the new paise unit-price contract. Run all of them locally before applying 0007–0009 (PRD §43). |
 | Settlement mathematics | Final rules deferred (PRD §46); boundary is in place. |
 | Correction UI | Ledger supports it; no screen yet. |
 | Push delivery | Device registration is done; end-to-end delivery needs a live Supabase project with VAPID configured. |
 
 ## 7. Verification performed
 
-- 45 automated tests, including one test that walks the complete MVP journey
-  (create room → code → buy → eat → Activity → Account) with no seeded data.
+- 46 automated tests, including one test that walks the complete MVP journey
+  (create room → code → buy → eat → Activity → Account) and one that checks a
+  room which no longer answers for this device is not repainted from cache.
 - `tsc --noEmit` clean; production build clean with the service worker
   generated.
 - Purchase unit price, rollback isolation and post-rejection reconciliation are
