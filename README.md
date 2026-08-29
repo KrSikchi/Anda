@@ -71,7 +71,7 @@ psql -X -v ON_ERROR_STOP=1 -d anda_test -f supabase/tests/atomicity_setup.sql
 # races (see docs/atomicity.md), then:
 psql -X -d anda_test -f supabase/tests/atomicity_assert.sql    # 20 checks
 psql -X -d anda_test -f supabase/tests/notifications.sql       # 24 checks
-psql -X -d anda_test -f supabase/tests/identity_settlement.sql # 0007/0008/0009 (31 checks)
+psql -X -d anda_test -f supabase/tests/identity_settlement.sql # 0007/0008/0009 (35 checks)
 
 # Web app
 cd web && npm install
