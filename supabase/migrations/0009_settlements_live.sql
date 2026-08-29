@@ -176,6 +176,10 @@ grant execute on function public.record_settlement(uuid, uuid, bigint) to authen
 -- 4. room_ledger: expose what each member has already settled, so the Account
 --    screen reads balances from one room-scoped call (PRD §45, §52).
 -- ---------------------------------------------------------------------------
+-- Return shape changed vs 0008 (purchased/settled/outstanding_minor added).
+-- CREATE OR REPLACE cannot change a return type, so drop first.
+drop function if exists public.room_ledger(uuid);
+
 create or replace function public.room_ledger(p_room_id uuid)
 returns table (
     room_id             uuid,
@@ -292,6 +296,10 @@ grant execute on function public.room_ledger(uuid) to authenticated;
 -- ---------------------------------------------------------------------------
 -- 5. room_history: settlements appear in Activity (PRD §26, §30).
 -- ---------------------------------------------------------------------------
+-- Return shape changed vs 0008 (amount_minor added). CREATE OR REPLACE
+-- cannot change a return type, so drop first.
+drop function if exists public.room_history(uuid);
+
 create or replace function public.room_history(p_room_id uuid)
 returns table (
     entry_id      uuid,
@@ -318,8 +326,8 @@ as $$
                m.display_name as member_name,
                null::uuid as correction_of,
                format('%s per egg · %s total',
-                      p.cost_per_egg,
-                      (p.unit_price_minor * p.quantity)::numeric / 100) as detail,
+                      round(p.cost_per_egg, 2),
+                      round((p.unit_price_minor * p.quantity)::numeric / 100, 2)) as detail,
                (p.unit_price_minor * p.quantity)::bigint as amount_minor
         from public.purchases p
         join public.members m on m.id = p.member_id

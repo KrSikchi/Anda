@@ -130,6 +130,10 @@ end $$;
 --    changes — the interval-overlap allocation now multiplies by integer
 --    paise instead of a derived numeric.
 -- ---------------------------------------------------------------------------
+-- Return shape changed vs 0003 (added is_host; liability → liability_minor
+-- bigint). CREATE OR REPLACE cannot change a return type, so drop first.
+drop function if exists public.room_ledger(uuid);
+
 create or replace function public.room_ledger(p_room_id uuid)
 returns table (
     room_id             uuid,
@@ -242,8 +246,8 @@ as $$
                m.display_name as member_name,
                null::uuid as correction_of,
                format('%s per egg · %s total',
-                      p.cost_per_egg,
-                      (p.unit_price_minor * p.quantity)::numeric / 100) as detail
+                      round(p.cost_per_egg, 2),
+                      round((p.unit_price_minor * p.quantity)::numeric / 100, 2)) as detail
         from public.purchases p
         join public.members m on m.id = p.member_id
         where p.room_id = p_room_id
