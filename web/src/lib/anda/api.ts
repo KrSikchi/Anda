@@ -100,6 +100,29 @@ export function createSupabaseApi(client: SupabaseClient): AndaApi {
       });
       if (error) throw new Error(stripPrefix(error.message));
     },
+
+    async addPushSubscription(
+      roomId: string,
+      endpoint: string,
+      p256dh: string,
+      auth: string,
+    ): Promise<void> {
+      const { error } = await client.rpc('add_push_subscription', {
+        p_room_id: roomId,
+        p_endpoint: endpoint,
+        p_p256dh: p256dh,
+        p_auth: auth,
+      });
+      if (error) throw new Error(stripPrefix(error.message));
+    },
+
+    async removePushSubscription(roomId: string, endpoint: string): Promise<void> {
+      const { error } = await client.rpc('remove_push_subscription', {
+        p_room_id: roomId,
+        p_endpoint: endpoint,
+      });
+      if (error) throw new Error(stripPrefix(error.message));
+    },
   };
 }
 

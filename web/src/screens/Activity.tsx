@@ -60,12 +60,18 @@ function Delta({ entry }: { entry: HistoryEntry }) {
     );
   }
   const qty = entry.quantity ?? 0;
-  const positive = entry.kind === 'purchase' || qty < 0;
-  return (
-    <span className={`entry__delta entry__delta--${positive ? 'positive' : 'negative'}`}>
-      {qty > 0 ? `+${qty}` : qty}
-    </span>
-  );
+
+  // A purchase puts eggs in; eating takes them out; a correction puts back
+  // the eggs it undoes (corrections are stored negative — §10).
+  if (entry.kind === 'correction') {
+    return (
+      <span className="entry__delta entry__delta--positive">+{Math.abs(qty)}</span>
+    );
+  }
+  if (entry.kind === 'purchase') {
+    return <span className="entry__delta entry__delta--positive">+{qty}</span>;
+  }
+  return <span className="entry__delta entry__delta--negative">−{qty}</span>;
 }
 
 export function Activity() {

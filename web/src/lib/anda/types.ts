@@ -170,4 +170,12 @@ export interface AndaApi {
     toMemberId: string,
     amountMinor: Minor,
   ): Promise<void>;
+  /** Device-bound low-stock push registration (PRD §35, §36). */
+  addPushSubscription?(
+    roomId: string,
+    endpoint: string,
+    p256dh: string,
+    auth: string,
+  ): Promise<void>;
+  removePushSubscription?(roomId: string, endpoint: string): Promise<void>;
 }

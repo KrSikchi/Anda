@@ -55,11 +55,6 @@ export function isValidationError(message: string): boolean {
   return VALIDATION_MARKERS.some((m) => message.includes(m));
 }
 
-export async function defaultOfflineRepo(): Promise<OfflineRepo> {
-  const { IdbRepo } = await import('./db');
-  return new IdbRepo();
-}
-
 export class AndaStore {
   readonly roomId: string;
   readonly currentMemberId: string;

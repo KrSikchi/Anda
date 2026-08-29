@@ -483,6 +483,16 @@ export function createDemoBackend(): DemoBackend {
       });
       emit(roomId, 'settlements');
     },
+
+    // Push is a device concern with no local equivalent; recording nothing is
+    // honest — the demo backend never pretends to deliver notifications.
+    async addPushSubscription() {
+      /* no-op in demo mode */
+    },
+
+    async removePushSubscription() {
+      /* no-op in demo mode */
+    },
   };
 
   const transport: RealtimeTransport = {

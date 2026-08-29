@@ -20,6 +20,12 @@ import {
   formatMinor,
   settlementCounterparty,
 } from '../lib/anda/finance';
+import {
+  currentPushState,
+  disableLowStockAlerts,
+  enableLowStockAlerts,
+  type PushState,
+} from '../lib/anda/notifications';
 
 export function Account() {
   const { store, identity, auth, backend, leaveRoom } = useSession();
@@ -28,6 +34,8 @@ export function Account() {
   const [copied, setCopied] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [settling, setSettling] = useState(false);
+  const [pushState, setPushState] = useState<PushState>(() => currentPushState());
+  const [pushBusy, setPushBusy] = useState(false);
 
   if (!identity) return <Navigate to="/" replace />;
   if (!s || !s.view) return <div className="screen"><Loading label="Loading account…" /></div>;
@@ -222,6 +230,42 @@ export function Account() {
           Swipe your row to record a settlement with {counterparty.display_name}. Anda only
           records it — no money moves through the app.
         </p>
+      ) : null}
+
+      {/* Low-stock alerts — supplemental, never required (PRD §35, §36) */}
+      {pushState !== 'unsupported' ? (
+        <Card>
+          <div className="row row--between">
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>Low-stock alerts</div>
+              <p className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+                {pushState === 'denied'
+                  ? 'Notifications are blocked for this site. Allow them in your browser settings.'
+                  : `A nudge when ${view.roomName} drops to ${view.lowStockThreshold} eggs — once, not every time.`}
+              </p>
+            </div>
+            <Button
+              variant={pushState === 'on' ? 'ghost' : 'primary'}
+              fullWidth={false}
+              busy={pushBusy}
+              disabled={pushState === 'denied'}
+              onClick={async () => {
+                setPushBusy(true);
+                try {
+                  setPushState(
+                    pushState === 'on'
+                      ? await disableLowStockAlerts(backend.api, identity.roomId)
+                      : await enableLowStockAlerts(backend.api, identity.roomId),
+                  );
+                } finally {
+                  setPushBusy(false);
+                }
+              }}
+            >
+              {pushState === 'on' ? 'On' : 'Turn on'}
+            </Button>
+          </div>
+        </Card>
       ) : null}
 
       {/* Lightweight room actions live here, not in a Room tab (PRD §6) */}

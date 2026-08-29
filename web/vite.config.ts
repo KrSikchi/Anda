@@ -36,10 +36,14 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // The sandbox serves the dev server through a generated preview host;
+    // Vite's host check would otherwise reject it with a 403.
+    allowedHosts: true,
   },
   preview: {
     host: '0.0.0.0',
     port: 4173,
+    allowedHosts: true,
   },
   test: {
     // Store/offline/push suites are framework-free and run in Node.
